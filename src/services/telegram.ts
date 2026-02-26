@@ -1,19 +1,44 @@
 import TelegramBot from 'node-telegram-bot-api';
 import { Notifier, NotificationPayload } from './notifier';
-import { User } from '../models/user';
+import { User, IUser } from '../models/user';
 import { encrypt } from './encryption';
+export function buildJql(scopes: any, email?: string): string {
+    const parts: string[] = [];
+    if (scopes.assigned) parts.push('assignee = currentUser()');
+    if (scopes.created) parts.push('reporter = currentUser()');
+    if (scopes.participated) {
+        if (email) {
+            parts.push(`issue in updatedBy("${email}")`);
+        } else {
+            parts.push('issue in updatedBy(currentUser())');
+        }
+    }
+    if (scopes.watched) parts.push('issue in watchedIssues()');
 
-const JQL_SCOPES = {
-    MINE: 'assignee = currentUser() OR reporter = currentUser() AND updated > -1d',
-    WATCHED: 'watcher = currentUser() AND updated > -1d',
-    ALL: 'updated > -1d'
-};
+    if (parts.length === 0) {
+        return 'updated > -1d';
+    }
 
-function getScopeLabel(jql: string): string {
-    if (jql === JQL_SCOPES.MINE) return '👤 My Issues';
-    if (jql === JQL_SCOPES.WATCHED) return '👁️ Watched';
-    if (jql === JQL_SCOPES.ALL) return '🌐 All Updates';
-    return '⚙️ Custom JQL';
+    return `(${parts.join(' OR ')}) AND updated > -1d`;
+}
+
+export function getScopeLabel(user: IUser): string {
+    const scopes = user.preferences?.relationshipScopes;
+    if (!scopes) return '⚙️ Custom JQL';
+
+    const expectedJql = buildJql(scopes, user.jiraEmail);
+    if (user.jql !== expectedJql) {
+        return '⚙️ Custom JQL';
+    }
+
+    const labels: string[] = [];
+    if (scopes.assigned) labels.push('👤 Assigned to Me');
+    if (scopes.created) labels.push('📝 Created by Me');
+    if (scopes.participated) labels.push('🎯 Participated');
+    if (scopes.watched) labels.push('👁️ Watched');
+
+    if (labels.length === 0) return '🌐 All Updates';
+    return labels.join(', ');
 }
 
 /**
@@ -27,6 +52,16 @@ export class TelegramNotifier implements Notifier {
     constructor(token: string, encryptionKey?: string | null) {
         this.bot = new TelegramBot(token, { polling: true });
         this.encryptionKey = encryptionKey || null;
+
+        // Handle polling errors gracefully
+        this.bot.on('polling_error', (error: any) => {
+            if (error.message && error.message.includes('ECONNRESET')) {
+                console.log('[Telegram] Warning: Polling connection reset (transient network issue). Auto-reconnecting...');
+            } else {
+                console.error(`[Telegram] Polling error: ${error.message}`);
+            }
+        });
+
         this.registerCommands();
     }
 
@@ -79,24 +114,39 @@ export class TelegramNotifier implements Notifier {
                 await user.save();
                 await this.bot.sendMessage(
                     chatId,
-                    '▶️ Monitoring resumed. Use /stop to pause.',
+                    '▶️ Monitoring resumed. Use /stop to pause.\nUse /help for more instructions.',
                 );
                 console.log(`[Telegram] User ${chatId} resumed monitoring.`);
             } else {
                 await this.bot.sendMessage(
                     chatId,
                     `👋 Welcome to <b>Jira Monitor Bot</b>!\n\n` +
-                    `Use <code>/setup &lt;host&gt; &lt;email&gt; &lt;token&gt;</code> to register.\n` +
-                    `Use <code>/setup &lt;host&gt; &lt;email&gt; &lt;token&gt; &lt;jql&gt;</code> to register with custom JQL.\n\n` +
-                    `Other commands:\n` +
-                    `  /status — Check monitoring status\n` +
-                    `  /stop — Stop monitoring\n` +
-                    `  /jql &lt;query&gt; — Update your JQL filter\n` +
-                    `  /settings — Configure preferences\n` +
-                    `  /start — Resume monitoring\n`,
+                    `Please use <code>/help</code> to see instructions on how to set up and use the bot.`,
                     { parse_mode: 'HTML' },
                 );
             }
+        });
+
+        // /help
+        this.bot.onText(/\/help/, async (msg) => {
+            const chatId = msg.chat.id.toString();
+            await this.bot.sendMessage(
+                chatId,
+                `📖 <b>Jira Monitor Bot Guide</b>\n\n` +
+                `<b>1. Setup</b>\n` +
+                `Use <code>/setup &lt;host&gt; &lt;email&gt; &lt;token&gt;</code> to register your Jira credentials. You can also append a custom JQL at the end.\n\n` +
+                `<b>2. Notification Settings</b>\n` +
+                `Use <code>/settings</code> to open an interactive menu to choose which issues to track (e.g. Assigned to Me, Created by Me, Participated, Watched), toggle field tracking, and set your timezone.\n\n` +
+                `<b>3. Commands</b>\n` +
+                `  /start — Resume monitoring\n` +
+                `  /stop — Pause monitoring\n` +
+                `  /status — Check your current monitoring status and scope\n` +
+                `  /settings — Configure tracking preferences and active hours\n` +
+                `  /tz &lt;timezone&gt; — Automatically set your timezone (e.g., <code>/tz Asia/Ho_Chi_Minh</code>)\n` +
+                `  /jql &lt;query&gt; — Override relationship scopes with a custom JQL filter\n` +
+                `  /help — Show this help message`,
+                { parse_mode: 'HTML' },
+            );
         });
 
         // /setup <host> <email> <token> [jql]
@@ -114,7 +164,7 @@ export class TelegramNotifier implements Notifier {
             }
 
             const [host, email, token, ...jqlParts] = args;
-            const jql = jqlParts.length > 0 ? jqlParts.join(' ') : 'updated > -1d';
+            const jql = jqlParts.length > 0 ? jqlParts.join(' ') : buildJql({ assigned: true, created: true, participated: false, watched: false }, email);
 
             // Encrypt the token if encryption key is available
             const storedToken = this.encryptionKey
@@ -130,6 +180,12 @@ export class TelegramNotifier implements Notifier {
                         jiraApiToken: storedToken,
                         jql,
                         isActive: true,
+                        'preferences.relationshipScopes': {
+                            assigned: true,
+                            created: true,
+                            participated: false,
+                            watched: false
+                        }
                     },
                     { upsert: true, new: true },
                 );
@@ -169,7 +225,7 @@ export class TelegramNotifier implements Notifier {
             }
 
             const statusEmoji = user.isActive ? '🟢' : '🔴';
-            const scopeLabel = getScopeLabel(user.jql);
+            const scopeLabel = getScopeLabel(user);
             await this.bot.sendMessage(
                 chatId,
                 `${statusEmoji} <b>Status:</b> ${user.isActive ? 'Active' : 'Stopped'}\n` +
@@ -256,12 +312,18 @@ export class TelegramNotifier implements Notifier {
                         show_alert: true
                     });
                     return;
-                } else if (data === 'scope_mine') {
-                    user.jql = JQL_SCOPES.MINE;
+                } else if (data === 'scope_assigned') {
+                    user.preferences.relationshipScopes.assigned = !user.preferences.relationshipScopes.assigned;
+                    user.jql = buildJql(user.preferences.relationshipScopes, user.jiraEmail);
+                } else if (data === 'scope_created') {
+                    user.preferences.relationshipScopes.created = !user.preferences.relationshipScopes.created;
+                    user.jql = buildJql(user.preferences.relationshipScopes, user.jiraEmail);
+                } else if (data === 'scope_participated') {
+                    user.preferences.relationshipScopes.participated = !user.preferences.relationshipScopes.participated;
+                    user.jql = buildJql(user.preferences.relationshipScopes, user.jiraEmail);
                 } else if (data === 'scope_watched') {
-                    user.jql = JQL_SCOPES.WATCHED;
-                } else if (data === 'scope_all') {
-                    user.jql = JQL_SCOPES.ALL;
+                    user.preferences.relationshipScopes.watched = !user.preferences.relationshipScopes.watched;
+                    user.jql = buildJql(user.preferences.relationshipScopes, user.jiraEmail);
                 }
 
                 await user.save();
@@ -307,7 +369,7 @@ export class TelegramNotifier implements Notifier {
             }
         });
 
-        console.log('[Telegram] Commands registered: /start, /setup, /status, /stop, /jql, /settings, /tz');
+        console.log('[Telegram] Commands registered: /start, /help, /setup, /status, /stop, /jql, /settings, /tz');
     }
 
     private async sendSettingsMenu(chatId: string): Promise<void> {
@@ -328,13 +390,16 @@ export class TelegramNotifier implements Notifier {
         const p = user.preferences || {
             trackStatus: true,
             trackAssignee: true,
+            relationshipScopes: { assigned: true, created: true, participated: false, watched: false },
             schedule: { timezone: 'UTC', startTime: '00:00', endTime: '23:59' }
         };
 
         const statusIcon = p.trackStatus ? '✅' : '❌';
         const assigneeIcon = p.trackAssignee ? '✅' : '❌';
 
-        const scopeLabel = getScopeLabel(user.jql);
+        const scopes = p.relationshipScopes || { assigned: true, created: true, participated: false, watched: false };
+
+        const scopeLabel = getScopeLabel(user);
 
         const text = `⚙️ <b>Notification Settings</b>\n\n` +
             `<b>Scope:</b> ${scopeLabel}\n` +
@@ -344,9 +409,12 @@ export class TelegramNotifier implements Notifier {
         const replyMarkup = {
             inline_keyboard: [
                 [
-                    { text: `👤 My Issues`, callback_data: 'scope_mine' },
-                    { text: `👁️ Watched`, callback_data: 'scope_watched' },
-                    { text: `🌐 All Updates`, callback_data: 'scope_all' },
+                    { text: `${scopes.assigned ? '✅' : '❌'} Assigned`, callback_data: 'scope_assigned' },
+                    { text: `${scopes.created ? '✅' : '❌'} Created`, callback_data: 'scope_created' },
+                ],
+                [
+                    { text: `${scopes.participated ? '✅' : '❌'} Participated`, callback_data: 'scope_participated' },
+                    { text: `${scopes.watched ? '✅' : '❌'} Watched`, callback_data: 'scope_watched' },
                 ],
                 [
                     { text: `${statusIcon} Track Status`, callback_data: 'toggle_status' },
@@ -363,31 +431,62 @@ export class TelegramNotifier implements Notifier {
 
     private formatMessage(payload: NotificationPayload): string {
         const issueUrl = `${payload.host}/browse/${payload.issueKey}`;
-        const lines = [
-            `🔔 <b>Jira Issue Updated</b>: <a href="${issueUrl}">${payload.issueKey}</a>`,
-            ``,
-            `<b>Summary:</b> ${this.escapeHtml(payload.summary)}`,
-        ];
+        const lines: string[] = [];
 
-        if (payload.diffs && payload.diffs.length > 0) {
-            lines.push(``, `<b>Changes:</b>`);
-            for (const diff of payload.diffs) {
-                const oldVal = diff.oldValue || '<i>None</i>';
-                const newVal = diff.newValue || '<i>None</i>';
-                lines.push(`• <i>${this.escapeHtml(diff.field)}</i>: ${this.escapeHtml(oldVal)} ➡️ ${this.escapeHtml(newVal)}`);
-            }
-        } else {
-            // Fallback if no diffs provided
+        if (payload.isNew) {
             lines.push(
-                `<b>Status:</b> ${this.escapeHtml(payload.status)}`,
-                `<b>Assignee:</b> ${this.escapeHtml(payload.assignee || 'Unassigned')}`,
+                `✨ <b>New Issue: <a href="${issueUrl}">${payload.issueKey}</a></b>`,
+                `<b>Summary:</b> ${this.escapeHtml(payload.summary)}`,
+                ``,
+                `<b>Status:</b> ${this.escapeHtml(payload.status)} | <b>Assignee:</b> ${this.escapeHtml(payload.assignee || 'Unassigned')}`
             );
+        } else {
+            lines.push(
+                `🔔 <b><a href="${issueUrl}">${payload.issueKey}</a>: ${this.escapeHtml(payload.summary)}</b>`,
+            );
+
+            if (payload.diffs && payload.diffs.length > 0) {
+                lines.push(``, `<b>Changes:</b>`);
+                for (const diff of payload.diffs) {
+                    const oldVal = diff.oldValue || '<i>None</i>';
+                    const newVal = diff.newValue || '<i>None</i>';
+
+                    const oldStr = oldVal === '<i>None</i>' ? oldVal : this.escapeHtml(oldVal.length > 150 ? oldVal.substring(0, 150) + '...' : oldVal);
+                    const newStr = newVal === '<i>None</i>' ? newVal : this.escapeHtml(newVal.length > 150 ? newVal.substring(0, 150) + '...' : newVal);
+
+                    lines.push(`• <i>${this.escapeHtml(diff.field)}</i>: ${oldStr} ➡️ ${newStr}`);
+                }
+            } else {
+                // Fallback if no diffs provided but not explicitly new
+                lines.push(
+                    ``,
+                    `<b>Status:</b> ${this.escapeHtml(payload.status)}`,
+                    `<b>Assignee:</b> ${this.escapeHtml(payload.assignee || 'Unassigned')}`,
+                );
+            }
+        }
+
+        // Format timestamp based on user timezone
+        const tz = payload.userTimezone || 'UTC';
+        let timeString = '';
+        try {
+            timeString = new Intl.DateTimeFormat('en-GB', {
+                timeZone: tz,
+                day: '2-digit',
+                month: '2-digit',
+                year: 'numeric',
+                hour: '2-digit',
+                minute: '2-digit',
+                hour12: false
+            }).format(payload.detectedAt);
+        } catch (e) {
+            // Fallback if timezone is somehow invalid
+            timeString = payload.detectedAt.toISOString();
         }
 
         lines.push(
             ``,
-            `<i>Detected at:</i> ${payload.detectedAt.toISOString()}`,
-            `<i>Stable since:</i> ${payload.stabilizedAt.toISOString()}`,
+            `🕒 <i>Updated at: ${timeString}</i>`,
         );
         return lines.join('\n');
     }

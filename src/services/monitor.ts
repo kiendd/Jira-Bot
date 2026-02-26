@@ -16,6 +16,7 @@ interface PendingChange {
     diffs: FieldDiff[];
     firstDetectedAt: Date;
     lastChangeTime: Date;
+    isNew?: boolean;
 }
 
 export class MonitorService {
@@ -133,11 +134,13 @@ export class MonitorService {
         let issues: JiraIssue[];
         try {
             issues = await jiraClient.searchIssues(user.jql);
-        } catch (error) {
-            const msg = (error as Error).message;
+        } catch (error: any) {
+            const msg = error.message;
+            const detail = error.response?.data?.errorMessages?.join(', ') || error.response?.data?.errorMessages || '';
             console.error(
-                `[Monitor] User ${chatId}: Failed to fetch issues:`,
+                `[Monitor] User ${chatId}: Failed to fetch issues (JQL: ${user.jql}):`,
                 msg,
+                detail
             );
 
             if (msg.includes('401') || msg.includes('403')) {
@@ -182,11 +185,23 @@ export class MonitorService {
             // Generate field diffs
             const diffs: FieldDiff[] = [];
             if (previousState && hasChanged) {
-                if (previousState.status !== issue.status) {
-                    diffs.push({ field: 'Status', oldValue: previousState.status, newValue: issue.status });
-                }
-                if (previousState.assignee !== (issue.assignee || null)) {
-                    diffs.push({ field: 'Assignee', oldValue: previousState.assignee || 'Unassigned', newValue: issue.assignee || 'Unassigned' });
+                if (issue.changelogItems && issue.changelogItems.length > 0) {
+                    for (const item of issue.changelogItems) {
+                        const fieldName = item.field || 'Unknown';
+                        diffs.push({
+                            field: fieldName.charAt(0).toUpperCase() + fieldName.slice(1),
+                            oldValue: item.fromString || item.from || 'None',
+                            newValue: item.toString || item.to || 'None',
+                        });
+                    }
+                } else {
+                    // Fallback comparison for issues without a changelog payload in this fetch
+                    if (previousState.status !== issue.status) {
+                        diffs.push({ field: 'Status', oldValue: previousState.status, newValue: issue.status });
+                    }
+                    if (previousState.assignee !== (issue.assignee || null)) {
+                        diffs.push({ field: 'Assignee', oldValue: previousState.assignee || 'Unassigned', newValue: issue.assignee || 'Unassigned' });
+                    }
                 }
             }
 
@@ -205,6 +220,15 @@ export class MonitorService {
             if (isFirstPoll) continue;
 
             if (hasChanged && previousState) {
+                const isSelfAction = (issue.lastUpdaterEmail && issue.lastUpdaterEmail === user.jiraEmail) ||
+                    (issue.lastUpdaterName && issue.lastUpdaterName === user.jiraEmail);
+
+                if (isSelfAction) {
+                    console.log(`[Monitor] User ${chatId}: Ignored self-action change on ${issue.key}.`);
+                    pendingChanges.delete(issue.key);
+                    continue;
+                }
+
                 // Change detected!
                 const pending = pendingChanges.get(issue.key);
                 if (pending) {
@@ -233,9 +257,10 @@ export class MonitorService {
                         summary: issue.summary,
                         status: issue.status,
                         assignee: issue.assignee,
-                        diffs,
+                        diffs: diffs,
                         firstDetectedAt: now,
                         lastChangeTime: now,
+                        isNew: !previousState,
                     });
                     console.log(
                         `[Monitor] User ${chatId}: Issue ${issue.key} changed. Added to pending.`,
@@ -286,7 +311,7 @@ export class MonitorService {
                 });
 
                 // Check if we still have changes to notify after filtering
-                if (filteredDiffs.length > 0 || pending.diffs.length === 0) {
+                if (filteredDiffs.length > 0 || pending.isNew) {
                     pending.diffs = filteredDiffs;
                     toNotify.push(pending);
                 } else {
@@ -337,6 +362,8 @@ export class MonitorService {
                 diffs: pending.diffs,
                 detectedAt: pending.firstDetectedAt,
                 stabilizedAt: now,
+                userTimezone: prefs.schedule.timezone,
+                isNew: pending.isNew,
             };
 
             try {

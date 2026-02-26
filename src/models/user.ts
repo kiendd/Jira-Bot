@@ -3,6 +3,12 @@ import mongoose, { Schema, Document } from 'mongoose';
 export interface IUserPreferences {
     trackStatus: boolean;
     trackAssignee: boolean;
+    relationshipScopes: {
+        assigned: boolean;
+        created: boolean;
+        participated: boolean;
+        watched: boolean;
+    };
     schedule: {
         timezone: string;
         activeDays: number[];
@@ -34,6 +40,12 @@ const UserSchema = new Schema<IUser>(
         preferences: {
             trackStatus: { type: Boolean, default: true },
             trackAssignee: { type: Boolean, default: true },
+            relationshipScopes: {
+                assigned: { type: Boolean, default: true },
+                created: { type: Boolean, default: true },
+                participated: { type: Boolean, default: false },
+                watched: { type: Boolean, default: false },
+            },
             schedule: {
                 timezone: { type: String, default: 'UTC' },
                 activeDays: { type: [Number], default: [1, 2, 3, 4, 5] },

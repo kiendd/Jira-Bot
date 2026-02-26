@@ -12,12 +12,12 @@ The bot MUST poll Jira at a fixed interval (User specified 5 minutes).
 - **THEN** it triggers the polling function every 5 minutes.
 
 ### Requirement: Change Detection
-The bot MUST detect if an issue has changed since the last poll by comparing the `updated` timestamp provided by Jira.
+The bot MUST detect if an issue has changed since the last poll by comparing the `updated` timestamp provided by Jira. It MUST identify and record the specific fields that changed across all standard and custom fields (including but not limited to Status, Assignee, Summary, Description, Priority, and Comments). The bot MUST NOT notify the user if the recent change was authored by the user themselves (Self-Action Filtering).
 
-#### Scenario: Detect Update
-- **GIVEN** an issue with updated timestamp T1
-- **WHEN** the bot fetches the issue again with updated timestamp T2
-- **THEN** it identifies a change if T2 > T1.
+#### Scenario: Track Additional Fields
+- **GIVEN** an issue is monitored by the bot
+- **WHEN** the issue's priority is changed from "Medium" to "High", or a new comment is added by someone else
+- **THEN** the bot detects the change, identifies the specific field(s) modified, and queues a notification including this diff.
 
 ### Requirement: Debounce Stability Check
 The bot MUST NOT notify immediately upon detecting a change. It MUST aggregate changes for an issue until a "quiet period" implies stability. The quiet period is defined as: No further changes detected in a subsequent poll cycle (or time > 5 mins since last change).

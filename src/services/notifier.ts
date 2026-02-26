@@ -13,6 +13,8 @@ export interface NotificationPayload {
     diffs: FieldDiff[];
     detectedAt: Date;
     stabilizedAt: Date;
+    userTimezone?: string;
+    isNew?: boolean;
 }
 
 export interface Notifier {

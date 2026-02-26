@@ -12,12 +12,12 @@ The bot MUST accept a Telegram Bot Token via environment variable `TELEGRAM_BOT_
 - **THEN** it initializes the Telegram client.
 
 ### Requirement: Telegram Notification
-The bot MUST send notifications to the configured Telegram Chat ID. The notification MUST include: Issue Key, Summary, Changed fields, and Timestamp.
+The bot MUST send notifications to the configured Telegram Chat ID. The notification MUST include: Issue Key, Summary, Changed fields, and Timestamp. The Timestamp MUST be formatted in a human-readable layout according to the user's configured timezone, avoiding raw ISO date strings. Technical fields like "Stable since" should be omitted to prioritize readability.
 
-#### Scenario: Notification Trigger
-- **GIVEN** Issue A was unstable and is now stable (no changes in last cycle)
-- **WHEN** the bot runs the notification phase
-- **THEN** it sends a message to the Telegram Chat: "Issue PROJ-123 has stabilized. Changes detected."
+#### Scenario: Formatted Notification Delivery
+- **GIVEN** Issue A triggers a notification
+- **WHEN** the bot formats the message
+- **THEN** it generates a readable header (Issue Key + Summary), lists the changes, and appends a single timestamp formatted to the user's local timezone (e.g., `26/02/2026 14:45`).
 
 ### Requirement: Error Handling
 The bot MUST log an error to the console if sending a Telegram message fails, but must not crash.
