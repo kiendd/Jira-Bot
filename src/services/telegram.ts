@@ -1,7 +1,9 @@
 import TelegramBot from 'node-telegram-bot-api';
 import { Notifier, NotificationPayload } from './notifier';
 import { User, IUser } from '../models/user';
-import { encrypt } from './encryption';
+import { encrypt, decrypt } from './encryption';
+import { JiraClient } from './jira-client';
+
 export function buildJql(scopes: any, email?: string): string {
     const parts: string[] = [];
     if (scopes.assigned) parts.push('assignee = currentUser()');
@@ -75,9 +77,26 @@ export class TelegramNotifier implements Notifier {
         }
 
         const messages = this.formatMessage(payload);
-        for (const message of messages) {
+        for (let i = 0; i < messages.length; i++) {
             try {
-                await this.bot.sendMessage(chatId, message, { parse_mode: 'HTML' });
+                const isLastChunk = i === messages.length - 1;
+                const options: TelegramBot.SendMessageOptions = { parse_mode: 'HTML' };
+
+                if (isLastChunk) {
+                    options.reply_markup = {
+                        inline_keyboard: [
+                            [
+                                { text: '💬 Comment', callback_data: `comment_${payload.issueKey}` },
+                                { text: '👤 Assign to Me', callback_data: `assign_${payload.issueKey}` }
+                            ],
+                            [
+                                { text: '▶️ Transition Status', callback_data: `transition_${payload.issueKey}` }
+                            ]
+                        ]
+                    };
+                }
+
+                await this.bot.sendMessage(chatId, messages[i], options);
             } catch (error) {
                 console.error(
                     `[Telegram] Failed to send message chunk to ${chatId}:`,
@@ -342,6 +361,94 @@ export class TelegramNotifier implements Notifier {
                 } else if (data === 'scope_watched') {
                     user.preferences.relationshipScopes.watched = !user.preferences.relationshipScopes.watched;
                     user.jql = buildJql(user.preferences.relationshipScopes, user.jiraEmail);
+                } else if (data.startsWith('comment_')) {
+                    const issueKey = data.split('_')[1];
+                    await this.bot.answerCallbackQuery(query.id);
+                    await this.bot.sendMessage(chatId, `Please type your comment for ${issueKey}:`, {
+                        reply_markup: {
+                            force_reply: true,
+                            selective: true
+                        }
+                    });
+                    return;
+                } else if (data.startsWith('assign_')) {
+                    const issueKey = data.split('_')[1];
+                    let apiToken = user.jiraApiToken;
+                    if (this.encryptionKey) {
+                        try { apiToken = decrypt(apiToken, this.encryptionKey); } catch (e) { }
+                    }
+                    const jiraClient = new JiraClient(user.jiraHost, user.jiraEmail, apiToken);
+                    const accountId = await jiraClient.getCurrentUserAccountId();
+                    if (accountId) {
+                        const success = await jiraClient.assignIssue(issueKey, accountId);
+                        await this.bot.answerCallbackQuery(query.id, {
+                            text: success ? `Assigned ${issueKey} to you!` : `Failed to assign ${issueKey}.`,
+                            show_alert: true
+                        });
+                    } else {
+                        await this.bot.answerCallbackQuery(query.id, { text: 'Could not fetch your account ID.', show_alert: true });
+                    }
+                    return;
+                } else if (data.startsWith('transition_')) {
+                    const issueKey = data.split('_')[1];
+                    let apiToken = user.jiraApiToken;
+                    if (this.encryptionKey) {
+                        try { apiToken = decrypt(apiToken, this.encryptionKey); } catch (e) { }
+                    }
+                    const jiraClient = new JiraClient(user.jiraHost, user.jiraEmail, apiToken);
+                    const transitions = await jiraClient.getTransitions(issueKey);
+
+                    if (transitions.length === 0) {
+                        await this.bot.answerCallbackQuery(query.id, { text: `No transitions available for ${issueKey}.`, show_alert: true });
+                        return;
+                    }
+
+                    const keyboard = transitions.map(t => [{
+                        text: t.name,
+                        callback_data: `dotransition_${issueKey}_${t.id}`
+                    }]);
+
+                    // Add a cancel button
+                    keyboard.push([{ text: '❌ Cancel', callback_data: `cancel_transition` }]);
+
+                    await this.bot.answerCallbackQuery(query.id);
+                    await this.bot.editMessageReplyMarkup({ inline_keyboard: keyboard }, { chat_id: chatId, message_id: messageId });
+                    return;
+                } else if (data.startsWith('dotransition_')) {
+                    const [, issueKey, transitionId] = data.split('_');
+                    let apiToken = user.jiraApiToken;
+                    if (this.encryptionKey) {
+                        try { apiToken = decrypt(apiToken, this.encryptionKey); } catch (e) { }
+                    }
+                    const jiraClient = new JiraClient(user.jiraHost, user.jiraEmail, apiToken);
+                    const success = await jiraClient.transitionIssue(issueKey, transitionId);
+
+                    await this.bot.answerCallbackQuery(query.id, {
+                        text: success ? `Transitioned ${issueKey} successfully!` : `Failed to transition ${issueKey}.`,
+                        show_alert: true
+                    });
+
+                    // Restore the original quick action buttons
+                    if (success) {
+                        await this.bot.editMessageReplyMarkup({
+                            inline_keyboard: [
+                                [
+                                    { text: '💬 Comment', callback_data: `comment_${issueKey}` },
+                                    { text: '👤 Assign to Me', callback_data: `assign_${issueKey}` }
+                                ],
+                                [
+                                    { text: '▶️ Transition Status', callback_data: `transition_${issueKey}` }
+                                ]
+                            ]
+                        }, { chat_id: chatId, message_id: messageId });
+                    }
+                    return;
+                } else if (data === 'cancel_transition') {
+                    await this.bot.answerCallbackQuery(query.id);
+                    // We don't have the issueKey directly in the cancel data, but we can't easily restore the exact previous keyboard without it. 
+                    // To keep it simple, we just clear the keyboard or try to parse the message text to find the issue key, but clearing is safer.
+                    await this.bot.editMessageReplyMarkup({ inline_keyboard: [] }, { chat_id: chatId, message_id: messageId });
+                    return;
                 }
 
                 await user.save();
@@ -384,6 +491,42 @@ export class TelegramNotifier implements Notifier {
                 await this.bot.sendMessage(chatId, `✅ Timezone updated to <b>${newTz}</b>.`, { parse_mode: 'HTML' });
             } catch (e) {
                 await this.bot.sendMessage(chatId, `❌ Invalid timezone string: <b>${newTz}</b>.\nPlease use IANA formats like <code>Asia/Ho_Chi_Minh</code> or <code>UTC</code>.`, { parse_mode: 'HTML' });
+            }
+        });
+
+        // Listen for ForceReply messages (for comments)
+        this.bot.on('message', async (msg) => {
+            const chatId = msg.chat.id.toString();
+            if (msg.reply_to_message && msg.reply_to_message.text) {
+                const text = msg.reply_to_message.text;
+                // Check if this is a reply to our comment prompt
+                if (text.startsWith('Please type your comment for ')) {
+                    const issueKey = text.replace('Please type your comment for ', '').replace(':', '').trim();
+                    const commentBody = msg.text;
+
+                    if (!commentBody) return;
+
+                    try {
+                        const user = await User.findOne({ chatId });
+                        if (!user) return;
+
+                        let apiToken = user.jiraApiToken;
+                        if (this.encryptionKey) {
+                            try { apiToken = decrypt(apiToken, this.encryptionKey); } catch (e) { }
+                        }
+
+                        const jiraClient = new JiraClient(user.jiraHost, user.jiraEmail, apiToken);
+                        const success = await jiraClient.addComment(issueKey, commentBody);
+
+                        if (success) {
+                            await this.bot.sendMessage(chatId, `✅ Comment added to ${issueKey}.`);
+                        } else {
+                            await this.bot.sendMessage(chatId, `❌ Failed to add comment to ${issueKey}.`);
+                        }
+                    } catch (error) {
+                        console.error(`[Telegram] Error adding comment:`, error);
+                    }
+                }
             }
         });
 

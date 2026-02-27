@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { buildJql, TelegramNotifier } from './telegram';
 import { NotificationPayload } from './notifier';
 
@@ -83,5 +83,39 @@ describe('TelegramNotifier Message Formatting', () => {
         // Check that 'A' repeats extensively
         const combined = chunks.join('');
         expect(combined).toContain('AAAA');
+    });
+
+    it('should add inline keyboard to the last message chunk', async () => {
+        const notifier = new TelegramNotifier('dummy_token');
+        const botMock = {
+            sendMessage: vi.fn().mockResolvedValue({}),
+            on: vi.fn(),
+            onText: vi.fn()
+        };
+        (notifier as any).bot = botMock;
+
+        const payload: NotificationPayload = {
+            host: 'https://jira.example.com',
+            issueKey: 'TEST-123',
+            summary: 'A test issue',
+            status: 'To Do',
+            assignee: 'John Doe',
+            diffs: [],
+            detectedAt: new Date(),
+            stabilizedAt: new Date(),
+            userTimezone: 'UTC'
+        };
+
+        await notifier.notify(payload, '12345');
+
+        expect(botMock.sendMessage).toHaveBeenCalledTimes(1);
+        const callArgs = botMock.sendMessage.mock.calls[0];
+        expect(callArgs[0]).toBe('12345'); // chatId
+        expect(callArgs[2].reply_markup.inline_keyboard).toBeDefined();
+
+        const keyboard = callArgs[2].reply_markup.inline_keyboard;
+        expect(keyboard[0][0].callback_data).toBe('comment_TEST-123');
+        expect(keyboard[0][1].callback_data).toBe('assign_TEST-123');
+        expect(keyboard[1][0].callback_data).toBe('transition_TEST-123');
     });
 });

@@ -175,4 +175,89 @@ export class JiraClient {
             return null;
         }
     }
+
+    /**
+     * Get the current user's Account ID (used for assignment in Jira Cloud).
+     */
+    async getCurrentUserAccountId(): Promise<string | null> {
+        try {
+            const user = await this.client.myself.getCurrentUser();
+            return user.accountId || null;
+        } catch (error) {
+            console.error('[JiraClient] Failed to get current user:', (error as Error).message);
+            return null;
+        }
+    }
+
+    /**
+     * Add a comment to an issue.
+     */
+    async addComment(issueKey: string, body: string): Promise<boolean> {
+        try {
+            // We use Jira format for body. To keep it simple, we just pass the text string.
+            // Jira v3 API sometimes expects Atlassian Document Format (ADF) for body.
+            // But the wrapper usually accepts a basic object if using v2 client.
+            // Note: We are using Version2Client, so `body` as string is valid.
+            await this.client.issueComments.addComment({
+                issueIdOrKey: issueKey,
+                body: body
+            });
+            return true;
+        } catch (error) {
+            console.error(`[JiraClient] Failed to add comment to ${issueKey}:`, (error as Error).message);
+            return false;
+        }
+    }
+
+    /**
+     * Assign an issue to a user account ID.
+     */
+    async assignIssue(issueKey: string, accountId: string): Promise<boolean> {
+        try {
+            await this.client.issues.assignIssue({
+                issueIdOrKey: issueKey,
+                accountId: accountId
+            });
+            return true;
+        } catch (error) {
+            console.error(`[JiraClient] Failed to assign ${issueKey}:`, (error as Error).message);
+            return false;
+        }
+    }
+
+    /**
+     * Get available transitions for an issue.
+     */
+    async getTransitions(issueKey: string): Promise<{ id: string; name: string }[]> {
+        try {
+            const result = await this.client.issues.getTransitions({
+                issueIdOrKey: issueKey
+            });
+            return (result.transitions || []).map(t => ({
+                id: t.id!,
+                name: t.name!
+            }));
+        } catch (error) {
+            console.error(`[JiraClient] Failed to get transitions for ${issueKey}:`, (error as Error).message);
+            return [];
+        }
+    }
+
+    /**
+     * Execute a status transition on an issue.
+     */
+    async transitionIssue(issueKey: string, transitionId: string): Promise<boolean> {
+        try {
+            await this.client.issues.doTransition({
+                issueIdOrKey: issueKey,
+                transition: {
+                    id: transitionId
+                }
+            });
+            return true;
+        } catch (error) {
+            console.error(`[JiraClient] Failed to transition ${issueKey}:`, (error as Error).message);
+            return false;
+        }
+    }
 }
