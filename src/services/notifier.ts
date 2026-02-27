@@ -15,6 +15,7 @@ export interface NotificationPayload {
     stabilizedAt: Date;
     userTimezone?: string;
     isNew?: boolean;
+    attachments?: { filename: string; buffer: Buffer }[];
 }
 
 export interface Notifier {

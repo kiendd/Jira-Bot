@@ -74,14 +74,30 @@ export class TelegramNotifier implements Notifier {
             return;
         }
 
-        const message = this.formatMessage(payload);
-        try {
-            await this.bot.sendMessage(chatId, message, { parse_mode: 'HTML' });
-        } catch (error) {
-            console.error(
-                `[Telegram] Failed to send message to ${chatId}:`,
-                (error as Error).message,
-            );
+        const messages = this.formatMessage(payload);
+        for (const message of messages) {
+            try {
+                await this.bot.sendMessage(chatId, message, { parse_mode: 'HTML' });
+            } catch (error) {
+                console.error(
+                    `[Telegram] Failed to send message chunk to ${chatId}:`,
+                    (error as Error).message,
+                );
+            }
+        }
+
+        // Send attachments if any
+        if (payload.attachments && payload.attachments.length > 0) {
+            for (const attachment of payload.attachments) {
+                try {
+                    await this.bot.sendDocument(chatId, attachment.buffer, {}, { filename: attachment.filename });
+                } catch (error) {
+                    console.error(
+                        `[Telegram] Failed to send attachment ${attachment.filename} to ${chatId}:`,
+                        (error as Error).message,
+                    );
+                }
+            }
         }
     }
 
@@ -91,7 +107,9 @@ export class TelegramNotifier implements Notifier {
     async notifyError(message: string, chatId?: string): Promise<void> {
         if (!chatId) return;
         try {
-            await this.bot.sendMessage(chatId, `⚠️ <b>Target Action Required:</b>\n${message}`, { parse_mode: 'HTML' });
+            // Trim error to prevent telegram 4096 error if error stack is massive
+            const trimmedMessage = message.length > 4000 ? message.substring(0, 4000) + '...' : message;
+            await this.bot.sendMessage(chatId, `⚠️ <b>Target Action Required:</b>\n${trimmedMessage}`, { parse_mode: 'HTML' });
         } catch (error) {
             console.error(
                 `[Telegram] Failed to send error to ${chatId}:`,
@@ -429,7 +447,7 @@ export class TelegramNotifier implements Notifier {
         return { text, replyMarkup };
     }
 
-    private formatMessage(payload: NotificationPayload): string {
+    private formatMessage(payload: NotificationPayload): string[] {
         const issueUrl = `${payload.host}/browse/${payload.issueKey}`;
         const lines: string[] = [];
 
@@ -451,8 +469,8 @@ export class TelegramNotifier implements Notifier {
                     const oldVal = diff.oldValue || '<i>None</i>';
                     const newVal = diff.newValue || '<i>None</i>';
 
-                    const oldStr = oldVal === '<i>None</i>' ? oldVal : this.escapeHtml(oldVal.length > 150 ? oldVal.substring(0, 150) + '...' : oldVal);
-                    const newStr = newVal === '<i>None</i>' ? newVal : this.escapeHtml(newVal.length > 150 ? newVal.substring(0, 150) + '...' : newVal);
+                    const oldStr = oldVal === '<i>None</i>' ? oldVal : this.escapeHtml(oldVal);
+                    const newStr = newVal === '<i>None</i>' ? newVal : this.escapeHtml(newVal);
 
                     lines.push(`• <i>${this.escapeHtml(diff.field)}</i>: ${oldStr} ➡️ ${newStr}`);
                 }
@@ -488,7 +506,48 @@ export class TelegramNotifier implements Notifier {
             ``,
             `🕒 <i>Updated at: ${timeString}</i>`,
         );
-        return lines.join('\n');
+
+        // Telegram max characters is 4096, but we need room for HTML tags. Safely split at 4000.
+        const chunks: string[] = [];
+        let currentChunk = '';
+
+        for (const line of lines) {
+            // If a single line is absurdly long (>4000 chars), we chunk the line itself
+            if (line.length > 4000) {
+                if (currentChunk.trim()) {
+                    chunks.push(currentChunk.trim());
+                    currentChunk = '';
+                }
+
+                // Break precisely while maintaining chunks <= 4000
+                let remaining = line;
+                while (remaining.length > 0) {
+                    if (remaining.length <= 4000) {
+                        chunks.push(remaining);
+                        break;
+                    }
+
+                    // Strict cut at 4000 to avoid infinite loops, we don't try to be too smart about HTML
+                    // because complex HTML parsing is overkill here and might break.
+                    chunks.push(remaining.substring(0, 4000));
+                    remaining = remaining.substring(4000);
+                }
+                continue;
+            }
+
+            if (currentChunk.length + line.length + 1 > 4000) {
+                chunks.push(currentChunk.trim());
+                currentChunk = line + '\n';
+            } else {
+                currentChunk += (currentChunk ? '\n' : '') + line;
+            }
+        }
+
+        if (currentChunk.trim()) {
+            chunks.push(currentChunk.trim());
+        }
+
+        return chunks;
     }
 
     private escapeHtml(text: string): string {

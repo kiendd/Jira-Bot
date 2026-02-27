@@ -17,6 +17,7 @@ interface PendingChange {
     firstDetectedAt: Date;
     lastChangeTime: Date;
     isNew?: boolean;
+    attachments?: { filename: string; buffer: Buffer }[];
 }
 
 export class MonitorService {
@@ -184,10 +185,27 @@ export class MonitorService {
 
             // Generate field diffs
             const diffs: FieldDiff[] = [];
+            const attachmentPromises: Promise<{ buffer: Buffer; filename: string } | null>[] = [];
+
             if (previousState && hasChanged) {
                 if (issue.changelogItems && issue.changelogItems.length > 0) {
                     for (const item of issue.changelogItems) {
                         const fieldName = item.field || 'Unknown';
+
+                        // Detect and download attachments
+                        if (fieldName.toLowerCase() === 'attachment' && item.toString) {
+                            // Extract URL or identifier if present in the 'to' field string?
+                            // Jira usually puts the filename in `toString` and ID in `to`
+                            if (item.to) {
+                                // To download attachment we need /rest/api/2/attachment/{id} or the generated URL
+                                // Actually, typically you hit the secure attachment content URL which requires hitting the attachment API
+                                // The /secure/attachment link needs to be grabbed. We can assume the URL is [jiraHost]/secure/attachment/[id]/[filename]
+                                const attachmentId = item.to;
+                                const attachmentUrl = `${user.jiraHost.replace(/\/+$/, '')}/secure/attachment/${attachmentId}/${encodeURIComponent(item.toString)}`;
+                                attachmentPromises.push(jiraClient.downloadAttachment(attachmentUrl));
+                            }
+                        }
+
                         diffs.push({
                             field: fieldName.charAt(0).toUpperCase() + fieldName.slice(1),
                             oldValue: item.fromString || item.from || 'None',
@@ -229,6 +247,9 @@ export class MonitorService {
                     continue;
                 }
 
+                // Wait for all attachments to resolve
+                const downloadedAttachments = (await Promise.all(attachmentPromises)).filter(a => a !== null) as { filename: string; buffer: Buffer }[];
+
                 // Change detected!
                 const pending = pendingChanges.get(issue.key);
                 if (pending) {
@@ -247,6 +268,10 @@ export class MonitorService {
                         }
                     }
 
+                    if (downloadedAttachments.length > 0) {
+                        pending.attachments = pending.attachments ? pending.attachments.concat(downloadedAttachments) : downloadedAttachments;
+                    }
+
                     console.log(
                         `[Monitor] User ${chatId}: Issue ${issue.key} changed again. Resetting debounce.`,
                     );
@@ -261,6 +286,7 @@ export class MonitorService {
                         firstDetectedAt: now,
                         lastChangeTime: now,
                         isNew: !previousState,
+                        attachments: downloadedAttachments.length > 0 ? downloadedAttachments : undefined,
                     });
                     console.log(
                         `[Monitor] User ${chatId}: Issue ${issue.key} changed. Added to pending.`,
@@ -364,6 +390,7 @@ export class MonitorService {
                 stabilizedAt: now,
                 userTimezone: prefs.schedule.timezone,
                 isNew: pending.isNew,
+                attachments: pending.attachments,
             };
 
             try {

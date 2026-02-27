@@ -130,4 +130,49 @@ export class JiraClient {
 
         return allIssues;
     }
+
+    /**
+     * Download an attachment securely from Jira using the stored credentials.
+     */
+    async downloadAttachment(url: string): Promise<{ buffer: Buffer; filename: string } | null> {
+        try {
+            // Reconstruct the auth header based on client configuration
+            // `this.client` is a bit opaque, so we'll construct the fetch manually using the underlying credentials
+            const authConfig = (this.client as any).config?.authentication;
+            let authHeader = '';
+
+            if (authConfig?.basic) {
+                const creds = `${authConfig.basic.email}:${authConfig.basic.apiToken}`;
+                authHeader = `Basic ${Buffer.from(creds).toString('base64')}`;
+            } else if (authConfig?.personalAccessToken) {
+                authHeader = `Bearer ${authConfig.personalAccessToken}`;
+            }
+
+            const response = await fetch(url, {
+                headers: authHeader ? { Authorization: authHeader } : undefined
+            });
+
+            if (!response.ok) {
+                console.error(`[JiraClient] Failed to download attachment: ${response.status} ${response.statusText}`);
+                return null;
+            }
+
+            const buffer = await response.arrayBuffer();
+
+            // Try to guess filename from URL or header
+            let filename = url.split('/').pop()?.split('?')[0] || 'attachment';
+            const disp = response.headers.get('content-disposition');
+            if (disp && disp.includes('filename=')) {
+                const match = disp.match(/filename="?([^"]+)"?/);
+                if (match && match[1]) {
+                    filename = match[1];
+                }
+            }
+
+            return { buffer: Buffer.from(buffer), filename };
+        } catch (error) {
+            console.error('[JiraClient] Error downloading attachment:', (error as Error).message);
+            return null;
+        }
+    }
 }

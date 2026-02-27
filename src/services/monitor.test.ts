@@ -183,4 +183,70 @@ describe('Changelog Field Diffs in MonitorService', () => {
             newValue: 'Added a new comment',
         });
     });
+
+    it('should detect attachment additions and download them', async () => {
+        const mockUser = {
+            chatId: '123_attach',
+            jiraEmail: 'testuser@example.com',
+            jiraHost: 'https://test.atlassian.net',
+            jiraApiToken: 'token',
+            jql: 'test jql',
+            isActive: true,
+            preferences: {
+                trackStatus: true,
+                trackAssignee: true,
+                schedule: { timezone: 'UTC', activeDays: [1, 2, 3, 4, 5], startTime: '00:00', endTime: '23:59' }
+            },
+            save: vi.fn()
+        };
+        (User.find as any) = vi.fn().mockResolvedValue([mockUser]);
+
+        (monitor as any).initializedUsers.add('123_attach');
+        (monitor as any).pendingByUser.set('123_attach', new Map());
+
+        (IssueState.find as any) = vi.fn().mockResolvedValue([
+            { chatId: '123_attach', issueKey: 'TEST-4', status: 'To Do', assignee: null, lastUpdated: '2023-01-01T00:00:00.000Z' }
+        ]);
+        (IssueState.findOneAndUpdate as any) = vi.fn().mockResolvedValue({});
+
+        const mockIssue = {
+            key: 'TEST-4',
+            summary: 'Attachment issue',
+            status: 'To Do',
+            assignee: null,
+            updated: '2023-01-01T01:00:00.000Z',
+            lastUpdaterEmail: 'anotheruser@example.com',
+            changelogItems: [
+                {
+                    field: 'Attachment',
+                    fromString: null,
+                    toString: 'image.png',
+                    to: '99999'
+                }
+            ]
+        };
+
+        (JiraClient.prototype.searchIssues as any) = vi.fn().mockResolvedValue([mockIssue]);
+        (JiraClient.prototype.downloadAttachment as any) = vi.fn().mockResolvedValue({
+            filename: 'image.png',
+            buffer: Buffer.from('mock image data')
+        });
+
+        await (monitor as any).pollAllUsers();
+
+        const pending = (monitor as any).pendingByUser.get('123_attach');
+        expect(pending.has('TEST-4')).toBe(true);
+        const pendingChange = pending.get('TEST-4');
+
+        // Verify attachment logic triggered
+        expect(JiraClient.prototype.downloadAttachment).toHaveBeenCalledWith(
+            'https://test.atlassian.net/secure/attachment/99999/image.png'
+        );
+
+        // Verify attachment is present on pending object
+        expect(pendingChange.attachments).toBeDefined();
+        expect(pendingChange.attachments.length).toBe(1);
+        expect(pendingChange.attachments[0].filename).toBe('image.png');
+        expect(pendingChange.attachments[0].buffer).toEqual(Buffer.from('mock image data'));
+    });
 });

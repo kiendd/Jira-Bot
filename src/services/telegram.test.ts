@@ -45,11 +45,43 @@ describe('TelegramNotifier Message Formatting', () => {
         const updatedMessageStr = formatMessage(updatedIssuePayload);
 
         // New issues should have the sparkle icon and "New Issue:" prefix
-        expect(newMessageStr).toContain('✨ <b>New Issue:');
-        expect(newMessageStr).toContain('TEST-123');
+        expect(newMessageStr[0]).toContain('✨ <b>New Issue:');
+        expect(newMessageStr[0]).toContain('TEST-123');
 
         // Updated issues should have the bell icon
-        expect(updatedMessageStr).toContain('🔔 <b><a href=');
-        expect(updatedMessageStr).not.toContain('✨ <b>New Issue:');
+        expect(updatedMessageStr[0]).toContain('🔔 <b><a href=');
+        expect(updatedMessageStr[0]).not.toContain('✨ <b>New Issue:');
+    });
+
+    it('should split messages longer than 4000 characters into chunks', () => {
+        const notifier = new TelegramNotifier('dummy_token');
+
+        // Create a massive payload, ensuring chunk splitting logic runs
+        const longComment = 'A'.repeat(5000);
+        const basePayload: NotificationPayload = {
+            host: 'https://jira.example.com',
+            issueKey: 'TEST-999',
+            summary: 'Huge update',
+            status: 'To Do',
+            assignee: 'John Doe',
+            diffs: [
+                { field: 'Comment', oldValue: 'None', newValue: longComment }
+            ],
+            detectedAt: new Date(),
+            stabilizedAt: new Date(),
+            userTimezone: 'UTC'
+        };
+
+        const formatMessage = (notifier as any).formatMessage.bind(notifier);
+        const chunks = formatMessage(basePayload);
+
+        // Entire message should be >5000 chars, so >1 chunk.
+        expect(chunks.length).toBeGreaterThan(1);
+        expect(chunks[0].length).toBeLessThanOrEqual(4000);
+        expect(chunks[1].length).toBeLessThanOrEqual(4000);
+        expect(chunks[0]).toContain('TEST-999');
+        // Check that 'A' repeats extensively
+        const combined = chunks.join('');
+        expect(combined).toContain('AAAA');
     });
 });
