@@ -194,13 +194,9 @@ export class JiraClient {
      */
     async addComment(issueKey: string, body: string): Promise<boolean> {
         try {
-            // We use Jira format for body. To keep it simple, we just pass the text string.
-            // Jira v3 API sometimes expects Atlassian Document Format (ADF) for body.
-            // But the wrapper usually accepts a basic object if using v2 client.
-            // Note: We are using Version2Client, so `body` as string is valid.
             await this.client.issueComments.addComment({
                 issueIdOrKey: issueKey,
-                body: body
+                comment: body
             });
             return true;
         } catch (error) {
