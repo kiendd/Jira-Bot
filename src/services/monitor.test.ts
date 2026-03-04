@@ -184,6 +184,68 @@ describe('Changelog Field Diffs in MonitorService', () => {
         });
     });
 
+    it('should detect new comments and add them to diffs', async () => {
+        const mockUser = {
+            chatId: '123_comment',
+            jiraEmail: 'testuser@example.com',
+            jiraApiToken: 'token',
+            jql: 'test jql',
+            isActive: true,
+            preferences: {
+                trackStatus: true,
+                trackAssignee: true,
+                schedule: { timezone: 'UTC', activeDays: [1, 2, 3, 4, 5], startTime: '00:00', endTime: '23:59' }
+            },
+            save: vi.fn()
+        };
+        (User.find as any) = vi.fn().mockResolvedValue([mockUser]);
+
+        (monitor as any).initializedUsers.add('123_comment');
+        (monitor as any).pendingByUser.set('123_comment', new Map());
+
+        (IssueState.find as any) = vi.fn().mockResolvedValue([
+            { chatId: '123_comment', issueKey: 'TEST-5', status: 'To Do', assignee: null, lastUpdated: '2023-01-01T00:00:00.000Z' }
+        ]);
+        (IssueState.findOneAndUpdate as any) = vi.fn().mockResolvedValue({});
+
+        const mockIssue = {
+            key: 'TEST-5',
+            summary: 'Comment issue',
+            status: 'To Do',
+            assignee: null,
+            updated: '2023-01-01T01:00:00.000Z', // Issue updated time
+            lastUpdaterEmail: 'anotheruser@example.com',
+            changelogItems: [],
+            comments: [
+                {
+                    author: 'John Doe',
+                    body: 'This is a new comment',
+                    created: '2023-01-01T00:30:00.000Z' // Newer than lastUpdated
+                },
+                {
+                    author: 'Jane Doe',
+                    body: 'This is an old comment',
+                    created: '2022-12-31T23:59:59.000Z' // Older than lastUpdated, shouldn't be extracted
+                }
+            ]
+        };
+
+        (JiraClient.prototype.searchIssues as any) = vi.fn().mockResolvedValue([mockIssue]);
+
+        await (monitor as any).pollAllUsers();
+
+        const pending = (monitor as any).pendingByUser.get('123_comment');
+        expect(pending?.has('TEST-5')).toBe(true);
+        const pendingChange = pending?.get('TEST-5');
+
+        expect(pendingChange?.diffs.length).toBe(1);
+        expect(pendingChange?.diffs[0]).toEqual({
+            field: 'Comment',
+            oldValue: 'None',
+            newValue: '[John Doe] This is a new comment',
+        });
+    });
+
     it('should detect attachment additions and download them', async () => {
         const mockUser = {
             chatId: '123_attach',
@@ -248,5 +310,104 @@ describe('Changelog Field Diffs in MonitorService', () => {
         expect(pendingChange.attachments.length).toBe(1);
         expect(pendingChange.attachments[0].filename).toBe('image.png');
         expect(pendingChange.attachments[0].buffer).toEqual(Buffer.from('mock image data'));
+    });
+});
+
+describe('New Task Detection in MonitorService', () => {
+    let monitor: MonitorService;
+    let mockNotifier: Notifier;
+
+    beforeEach(() => {
+        vi.clearAllMocks();
+        mockNotifier = {
+            notify: vi.fn(),
+            notifyError: vi.fn(),
+        } as any;
+        monitor = new MonitorService(mockNotifier, 60000, 30000);
+    });
+
+    it('should identify newly assigned tasks and mark them as isNew', async () => {
+        const mockUser = {
+            chatId: '123_new_task',
+            jiraEmail: 'testuser@example.com',
+            jiraApiToken: 'token',
+            jql: 'test jql',
+            isActive: true,
+            preferences: {
+                trackStatus: true,
+                trackAssignee: true,
+                schedule: { timezone: 'UTC', activeDays: [1, 2, 3, 4, 5], startTime: '00:00', endTime: '23:59' }
+            },
+            save: vi.fn()
+        };
+        (User.find as any) = vi.fn().mockResolvedValue([mockUser]);
+
+        // Simulate that the bot has already run its first poll previously
+        (monitor as any).initializedUsers.add('123_new_task');
+        (monitor as any).pendingByUser.set('123_new_task', new Map());
+
+        // The issue does NOT exist in the database yet
+        (IssueState.find as any) = vi.fn().mockResolvedValue([]);
+        (IssueState.findOneAndUpdate as any) = vi.fn().mockResolvedValue({});
+
+        const mockIssue = {
+            key: 'TEST-NEW',
+            summary: 'Brand new issue',
+            status: 'To Do',
+            assignee: 'Test User',
+            updated: '2023-01-01T01:00:00.000Z',
+            lastUpdaterEmail: 'anotheruser@example.com'
+        };
+        (JiraClient.prototype.searchIssues as any) = vi.fn().mockResolvedValue([mockIssue]);
+
+        await (monitor as any).pollAllUsers();
+
+        const pending = (monitor as any).pendingByUser.get('123_new_task');
+        expect(pending?.has('TEST-NEW')).toBe(true);
+        const pendingChange = pending?.get('TEST-NEW');
+
+        // It should be marked as new
+        expect(pendingChange?.isNew).toBe(true);
+        expect(pendingChange?.summary).toBe('Brand new issue');
+    });
+
+    it('should ignore new tasks during the first poll (baseline)', async () => {
+        const mockUser = {
+            chatId: '123_baseline',
+            jiraEmail: 'testuser@example.com',
+            jiraApiToken: 'token',
+            jql: 'test jql',
+            isActive: true,
+            preferences: {
+                trackStatus: true,
+                trackAssignee: true,
+                schedule: { timezone: 'UTC', activeDays: [1, 2, 3, 4, 5], startTime: '00:00', endTime: '23:59' }
+            },
+            save: vi.fn()
+        };
+        (User.find as any) = vi.fn().mockResolvedValue([mockUser]);
+
+        // This IS the first poll (user not in initializedUsers)
+        expect((monitor as any).initializedUsers.has('123_baseline')).toBe(false);
+
+        (IssueState.find as any) = vi.fn().mockResolvedValue([]);
+        (IssueState.findOneAndUpdate as any) = vi.fn().mockResolvedValue({});
+
+        const mockIssue = {
+            key: 'TEST-BASE',
+            summary: 'Baseline issue',
+            status: 'To Do',
+            assignee: 'Test User',
+            updated: '2023-01-01T01:00:00.000Z',
+            lastUpdaterEmail: 'anotheruser@example.com'
+        };
+        (JiraClient.prototype.searchIssues as any) = vi.fn().mockResolvedValue([mockIssue]);
+
+        await (monitor as any).pollAllUsers();
+
+        // Should not be in pending queue, just saved to IssueState
+        const pending = (monitor as any).pendingByUser.get('123_baseline');
+        expect(pending).toBeDefined();
+        expect(pending.size).toBe(0);
     });
 });

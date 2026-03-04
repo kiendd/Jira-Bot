@@ -596,7 +596,7 @@ export class TelegramNotifier implements Notifier {
 
         if (payload.isNew) {
             lines.push(
-                `✨ <b>New Issue: <a href="${issueUrl}">${payload.issueKey}</a></b>`,
+                `✨ <b>New Task: <a href="${issueUrl}">${payload.issueKey}</a></b>`,
                 `<b>Summary:</b> ${this.escapeHtml(payload.summary)}`,
                 ``,
                 `<b>Status:</b> ${this.escapeHtml(payload.status)} | <b>Assignee:</b> ${this.escapeHtml(payload.assignee || 'Unassigned')}`
@@ -605,26 +605,30 @@ export class TelegramNotifier implements Notifier {
             lines.push(
                 `🔔 <b><a href="${issueUrl}">${payload.issueKey}</a>: ${this.escapeHtml(payload.summary)}</b>`,
             );
+        }
 
-            if (payload.diffs && payload.diffs.length > 0) {
-                lines.push(``, `<b>Changes:</b>`);
-                for (const diff of payload.diffs) {
-                    const oldVal = diff.oldValue || '<i>None</i>';
-                    const newVal = diff.newValue || '<i>None</i>';
+        if (payload.diffs && payload.diffs.length > 0) {
+            lines.push(``, `<b>${payload.isNew ? 'Details' : 'Changes'}:</b>`);
+            for (const diff of payload.diffs) {
+                const oldVal = diff.oldValue || '<i>None</i>';
+                const newVal = diff.newValue || '<i>None</i>';
 
-                    const oldStr = oldVal === '<i>None</i>' ? oldVal : this.escapeHtml(oldVal);
-                    const newStr = newVal === '<i>None</i>' ? newVal : this.escapeHtml(newVal);
+                const oldStr = oldVal === '<i>None</i>' ? oldVal : this.escapeHtml(oldVal);
+                const newStr = newVal === '<i>None</i>' ? newVal : this.escapeHtml(newVal);
 
+                if (payload.isNew) {
+                    lines.push(`• <i>${this.escapeHtml(diff.field)}</i>: ${newStr}`);
+                } else {
                     lines.push(`• <i>${this.escapeHtml(diff.field)}</i>: ${oldStr} ➡️ ${newStr}`);
                 }
-            } else {
-                // Fallback if no diffs provided but not explicitly new
-                lines.push(
-                    ``,
-                    `<b>Status:</b> ${this.escapeHtml(payload.status)}`,
-                    `<b>Assignee:</b> ${this.escapeHtml(payload.assignee || 'Unassigned')}`,
-                );
             }
+        } else if (!payload.isNew) {
+            // Fallback if no diffs provided but not explicitly new
+            lines.push(
+                ``,
+                `<b>Status:</b> ${this.escapeHtml(payload.status)}`,
+                `<b>Assignee:</b> ${this.escapeHtml(payload.assignee || 'Unassigned')}`,
+            );
         }
 
         // Format timestamp based on user timezone

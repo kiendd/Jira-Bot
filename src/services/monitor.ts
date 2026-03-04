@@ -181,7 +181,8 @@ export class MonitorService {
 
         for (const issue of issues) {
             const previousState = stateMap.get(issue.key);
-            const hasChanged = !previousState || previousState.lastUpdated !== issue.updated;
+            const isNewTask = !previousState && !isFirstPoll;
+            const hasChanged = (!previousState && isFirstPoll) || (previousState && previousState.lastUpdated !== issue.updated);
 
             // Generate field diffs
             const diffs: FieldDiff[] = [];
@@ -221,6 +222,20 @@ export class MonitorService {
                         diffs.push({ field: 'Assignee', oldValue: previousState.assignee || 'Unassigned', newValue: issue.assignee || 'Unassigned' });
                     }
                 }
+
+                if (issue.comments && issue.comments.length > 0) {
+                    const prevLastUpdated = new Date(previousState.lastUpdated).getTime();
+                    for (const comment of issue.comments) {
+                        const commentCreated = new Date(comment.created).getTime();
+                        if (commentCreated > prevLastUpdated) {
+                            diffs.push({
+                                field: 'Comment',
+                                oldValue: 'None',
+                                newValue: `[${comment.author}] ${comment.body}`
+                            });
+                        }
+                    }
+                }
             }
 
             // Update DB state
@@ -237,14 +252,45 @@ export class MonitorService {
             // Skip change tracking on first poll (baseline)
             if (isFirstPoll) continue;
 
-            if (hasChanged && previousState) {
-                const isSelfAction = (issue.lastUpdaterEmail && issue.lastUpdaterEmail === user.jiraEmail) ||
-                    (issue.lastUpdaterName && issue.lastUpdaterName === user.jiraEmail);
+            if (hasChanged || isNewTask) {
+                // Determine if we should ignore this change as a self-action. 
+                // Only ignore self-actions on EXISTING tasks changing, NOT on brand new tasks.
+                if (hasChanged && previousState) {
+                    const isSelfAction = (issue.lastUpdaterEmail && issue.lastUpdaterEmail === user.jiraEmail) ||
+                        (issue.lastUpdaterName && issue.lastUpdaterName === user.jiraEmail);
 
-                if (isSelfAction) {
-                    console.log(`[Monitor] User ${chatId}: Ignored self-action change on ${issue.key}.`);
-                    pendingChanges.delete(issue.key);
-                    continue;
+                    if (isSelfAction) {
+                        console.log(`[Monitor] User ${chatId}: Ignored self-action change on ${issue.key}.`);
+                        pendingChanges.delete(issue.key);
+                        continue;
+                    }
+                }
+
+                if (isNewTask) {
+                    if (issue.description) {
+                        diffs.push({
+                            field: 'Description',
+                            oldValue: 'None',
+                            newValue: issue.description
+                        });
+                    }
+
+                    if (issue.allPopulatedFields && issue.allPopulatedFields.length > 0) {
+                        for (const field of issue.allPopulatedFields) {
+                            diffs.push({
+                                field: field.name,
+                                oldValue: 'None',
+                                newValue: field.value
+                            });
+                        }
+                    }
+
+                    if (issue.attachments && issue.attachments.length > 0) {
+                        for (const att of issue.attachments) {
+                            const attachmentUrl = `${user.jiraHost.replace(/\/+$/, '')}/secure/attachment/${att.id}/${encodeURIComponent(att.filename)}`;
+                            attachmentPromises.push(jiraClient.downloadAttachment(attachmentUrl));
+                        }
+                    }
                 }
 
                 // Wait for all attachments to resolve

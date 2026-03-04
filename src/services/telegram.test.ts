@@ -44,13 +44,13 @@ describe('TelegramNotifier Message Formatting', () => {
         const newMessageStr = formatMessage(newIssuePayload);
         const updatedMessageStr = formatMessage(updatedIssuePayload);
 
-        // New issues should have the sparkle icon and "New Issue:" prefix
-        expect(newMessageStr[0]).toContain('✨ <b>New Issue:');
+        // New issues should have the sparkle icon and "New Task:" prefix
+        expect(newMessageStr[0]).toContain('✨ <b>New Task:');
         expect(newMessageStr[0]).toContain('TEST-123');
 
         // Updated issues should have the bell icon
         expect(updatedMessageStr[0]).toContain('🔔 <b><a href=');
-        expect(updatedMessageStr[0]).not.toContain('✨ <b>New Issue:');
+        expect(updatedMessageStr[0]).not.toContain('✨ <b>New Task:');
     });
 
     it('should split messages longer than 4000 characters into chunks', () => {

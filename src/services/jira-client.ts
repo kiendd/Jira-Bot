@@ -19,6 +19,10 @@ export interface JiraIssue {
     lastUpdaterEmail?: string;
     lastUpdaterName?: string;
     changelogItems?: JiraChangelogItem[];
+    comments?: { author: string; body: string; created: string }[];
+    description?: string;
+    attachments?: { id: string; filename: string }[];
+    allPopulatedFields?: { name: string; value: string }[];
 }
 
 export class JiraClient {
@@ -69,8 +73,8 @@ export class JiraClient {
                 jql,
                 startAt,
                 maxResults,
-                fields: ['updated', 'summary', 'status', 'assignee', 'creator', 'reporter'],
-                expand: ['changelog'],
+                fields: ['*all'], // Fetch all fields for dynamic extraction
+                expand: ['changelog', 'names'], // 'names' maps customfield_XYZ to its display name
             });
 
             const issues = response.issues || [];
@@ -110,6 +114,19 @@ export class JiraClient {
                     }
                 }
 
+                const rawComments = (issue.fields as any)?.comment?.comments || [];
+                const finalComments = rawComments.map((c: any) => ({
+                    author: c.author?.displayName || c.author?.emailAddress || 'Unknown',
+                    body: c.body,
+                    created: c.created
+                }));
+
+                const rawAttachments = (issue.fields as any)?.attachment || [];
+                const finalAttachments = rawAttachments.map((a: any) => ({
+                    id: a.id.toString(),
+                    filename: a.filename
+                }));
+
                 allIssues.push({
                     key: issue.key,
                     summary: issue.fields?.summary || '(no summary)',
@@ -120,7 +137,9 @@ export class JiraClient {
                     updated: issue.fields?.updated || '',
                     lastUpdaterEmail,
                     lastUpdaterName,
-                    changelogItems: recentChangelogItems,
+                    description: (issue.fields as any)?.description || undefined,
+                    attachments: finalAttachments.length > 0 ? finalAttachments : undefined,
+                    allPopulatedFields: this.extractAllPopulatedFields(issue.fields, response.names || {}),
                 });
             }
 
@@ -129,6 +148,60 @@ export class JiraClient {
         }
 
         return allIssues;
+    }
+
+    /**
+     * Extracts non-technical populated fields from an issue's raw fields.
+     */
+    private extractAllPopulatedFields(fields: any, namesMap: { [key: string]: string }): { name: string; value: string }[] {
+        const result: { name: string; value: string }[] = [];
+        if (!fields) return result;
+
+        // Blocklist of technical/noisy/already-handled fields
+        const blocklist = new Set([
+            'worklog', 'watches', 'votes', 'progress', 'aggregateprogress', 'timetracking',
+            'customfield_10000', // Development (huge JSON)
+            'lastViewed', 'updated', 'created', 'resolutiondate',
+            'status', 'summary', 'assignee', 'Attachment', 'comment',
+            'project', 'issuetype', 'reporter', 'creator',
+            'issuelinks', 'subtasks'
+        ]);
+
+        for (const [key, value] of Object.entries(fields)) {
+            if (value == null || value === '' || blocklist.has(key)) continue;
+
+            const name = namesMap[key] || key;
+            if (blocklist.has(name) || name === 'Attachment' || name === 'Description') continue;
+
+            let stringValue = '';
+
+            if (typeof value === 'string') {
+                stringValue = value;
+            } else if (typeof value === 'number' || typeof value === 'boolean') {
+                stringValue = String(value);
+            } else if (Array.isArray(value)) {
+                if (value.length === 0) continue;
+                // Try to extract .name or .value from objects in array (e.g., Components, Labels, Fix versions)
+                const items = value.map(v => {
+                    if (typeof v === 'string') return v;
+                    if (v && typeof v === 'object') {
+                        return v.displayName || v.name || v.value || JSON.stringify(v);
+                    }
+                    return String(v);
+                });
+                stringValue = items.join(', ');
+            } else if (typeof value === 'object') {
+                // Object (e.g., Priority, Resolution, Custom object)
+                stringValue = (value as any).displayName || (value as any).name || (value as any).value;
+                if (!stringValue) continue; // Skip complex objects without a clear name
+            }
+
+            if (stringValue.trim()) {
+                result.push({ name, value: stringValue.trim() });
+            }
+        }
+
+        return result;
     }
 
     /**

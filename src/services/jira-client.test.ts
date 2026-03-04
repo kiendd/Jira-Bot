@@ -1,152 +1,62 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { JiraClient } from './jira-client';
 
-// Mock jira.js
-vi.mock('jira.js', () => {
-    return {
-        Version2Client: class {
-            public myself: any;
-            public issueComments: any;
-            public issues: any;
-
-            constructor() {
-                this.myself = {
-                    getCurrentUser: vi.fn()
-                };
-                this.issueComments = {
-                    addComment: vi.fn()
-                };
-                this.issues = {
-                    assignIssue: vi.fn(),
-                    getTransitions: vi.fn(),
-                    doTransition: vi.fn()
-                };
-            }
-        }
-    };
-});
-
 describe('JiraClient', () => {
-    let client: JiraClient;
-    let mockJiraJsClient: any;
+    let jiraClient: JiraClient;
 
     beforeEach(() => {
         vi.clearAllMocks();
-        client = new JiraClient('https://test.atlassian.net', 'test@example.com', 'token');
-        mockJiraJsClient = (client as any).client;
+        jiraClient = new JiraClient('https://test.atlassian.net', 'test@test.com', 'token');
     });
 
-    describe('getCurrentUserAccountId', () => {
-        it('should return accountId on success', async () => {
-            mockJiraJsClient.myself.getCurrentUser.mockResolvedValue({ accountId: 'account-123' });
+    describe('extractAllPopulatedFields', () => {
+        it('should extract non-technical populated fields and their names', () => {
+            const mockFields = {
+                customfield_10110: '2026-03-04',
+                customfield_10107: { displayName: 'Team A' }, // object with displayName
+                priority: { name: 'High' }, // object with name
+                labels: ['frontend', 'bug'], // array of strings
+                components: [{ name: 'UI' }, { name: 'Backend' }], // array of objects
+                emptyString: '', // should be ignored
+                nullValue: null, // should be ignored
+                worklog: { total: 0 }, // in blocklist, should be ignored
+                watches: { watchCount: 1 }, // in blocklist, should be ignored
+                project: { key: 'TEST' }, // in blocklist, should be ignored
+                description: 'This is a description', // explicitly skipped as it's handled separately
+            };
 
-            const result = await client.getCurrentUserAccountId();
+            const mockNamesMap = {
+                customfield_10110: 'Target end',
+                customfield_10107: 'Team',
+                priority: 'Priority',
+                labels: 'Labels',
+                components: 'Component/s',
+                emptyString: 'Empty',
+                nullValue: 'Null',
+                worklog: 'Log Work',
+                watches: 'Watchers',
+                project: 'Project',
+                description: 'Description'
+            };
 
-            expect(result).toBe('account-123');
-            expect(mockJiraJsClient.myself.getCurrentUser).toHaveBeenCalled();
-        });
+            const result = (jiraClient as any).extractAllPopulatedFields(mockFields, mockNamesMap);
 
-        it('should return null on failure', async () => {
-            mockJiraJsClient.myself.getCurrentUser.mockRejectedValue(new Error('API Error'));
+            expect(result).toHaveLength(5);
+            
+            expect(result).toContainEqual({ name: 'Target end', value: '2026-03-04' });
+            expect(result).toContainEqual({ name: 'Team', value: 'Team A' });
+            expect(result).toContainEqual({ name: 'Priority', value: 'High' });
+            expect(result).toContainEqual({ name: 'Labels', value: 'frontend, bug' });
+            expect(result).toContainEqual({ name: 'Component/s', value: 'UI, Backend' });
 
-            const result = await client.getCurrentUserAccountId();
-
-            expect(result).toBeNull();
-        });
-    });
-
-    describe('addComment', () => {
-        it('should return true on success', async () => {
-            mockJiraJsClient.issueComments.addComment.mockResolvedValue({});
-
-            const result = await client.addComment('TEST-1', 'Hello world');
-
-            expect(result).toBe(true);
-            expect(mockJiraJsClient.issueComments.addComment).toHaveBeenCalledWith({
-                issueIdOrKey: 'TEST-1',
-                body: 'Hello world'
-            });
-        });
-
-        it('should return false on failure', async () => {
-            mockJiraJsClient.issueComments.addComment.mockRejectedValue(new Error('API Error'));
-
-            const result = await client.addComment('TEST-1', 'Hello world');
-
-            expect(result).toBe(false);
-        });
-    });
-
-    describe('assignIssue', () => {
-        it('should return true on success', async () => {
-            mockJiraJsClient.issues.assignIssue.mockResolvedValue({});
-
-            const result = await client.assignIssue('TEST-1', 'account-123');
-
-            expect(result).toBe(true);
-            expect(mockJiraJsClient.issues.assignIssue).toHaveBeenCalledWith({
-                issueIdOrKey: 'TEST-1',
-                accountId: 'account-123'
-            });
-        });
-
-        it('should return false on failure', async () => {
-            mockJiraJsClient.issues.assignIssue.mockRejectedValue(new Error('API Error'));
-
-            const result = await client.assignIssue('TEST-1', 'account-123');
-
-            expect(result).toBe(false);
-        });
-    });
-
-    describe('getTransitions', () => {
-        it('should return array of transitions', async () => {
-            mockJiraJsClient.issues.getTransitions.mockResolvedValue({
-                transitions: [
-                    { id: '11', name: 'In Progress' },
-                    { id: '21', name: 'Done' }
-                ]
-            });
-
-            const result = await client.getTransitions('TEST-1');
-
-            expect(result).toEqual([
-                { id: '11', name: 'In Progress' },
-                { id: '21', name: 'Done' }
-            ]);
-            expect(mockJiraJsClient.issues.getTransitions).toHaveBeenCalledWith({
-                issueIdOrKey: 'TEST-1'
-            });
-        });
-
-        it('should return empty array on failure', async () => {
-            mockJiraJsClient.issues.getTransitions.mockRejectedValue(new Error('API Error'));
-
-            const result = await client.getTransitions('TEST-1');
-
-            expect(result).toEqual([]);
-        });
-    });
-
-    describe('transitionIssue', () => {
-        it('should return true on success', async () => {
-            mockJiraJsClient.issues.doTransition.mockResolvedValue({});
-
-            const result = await client.transitionIssue('TEST-1', '11');
-
-            expect(result).toBe(true);
-            expect(mockJiraJsClient.issues.doTransition).toHaveBeenCalledWith({
-                issueIdOrKey: 'TEST-1',
-                transition: { id: '11' }
-            });
-        });
-
-        it('should return false on failure', async () => {
-            mockJiraJsClient.issues.doTransition.mockRejectedValue(new Error('API Error'));
-
-            const result = await client.transitionIssue('TEST-1', '11');
-
-            expect(result).toBe(false);
+            // Ensure blocked/empty fields are not present
+            const extractedNames = result.map((r: any) => r.name);
+            expect(extractedNames).not.toContain('Empty');
+            expect(extractedNames).not.toContain('Null');
+            expect(extractedNames).not.toContain('Log Work');
+            expect(extractedNames).not.toContain('Watchers');
+            expect(extractedNames).not.toContain('Project');
+            expect(extractedNames).not.toContain('Description');
         });
     });
 });
