@@ -119,3 +119,84 @@ describe('TelegramNotifier Message Formatting', () => {
         expect(keyboard[1][0].callback_data).toBe('transition_TEST-123');
     });
 });
+
+describe('TelegramNotifier Attachment Grouping', () => {
+    it('should group multiple photos into a media group', async () => {
+        const notifier = new TelegramNotifier('dummy_token');
+        const botMock = {
+            sendMessage: vi.fn(),
+            sendMediaGroup: vi.fn().mockResolvedValue({}),
+            sendDocument: vi.fn(),
+            sendPhoto: vi.fn(),
+            on: vi.fn(),
+            onText: vi.fn()
+        };
+        (notifier as any).bot = botMock;
+
+        const payload: NotificationPayload = {
+            host: 'https://jira.example.com',
+            issueKey: 'TEST-124',
+            summary: 'Test grouping',
+            status: 'To Do',
+            assignee: 'John Doe',
+            diffs: [],
+            detectedAt: new Date(),
+            stabilizedAt: new Date(),
+            userTimezone: 'UTC',
+            attachments: [
+                { filename: 'image1.jpg', buffer: Buffer.from('img1') },
+                { filename: 'IMG_2024.PNG', buffer: Buffer.from('img2') },
+                { filename: 'doc.pdf', buffer: Buffer.from('pdf') },
+            ]
+        };
+
+        await notifier.notify(payload, '12345');
+
+        expect(botMock.sendMediaGroup).toHaveBeenCalledTimes(1);
+        const mediaGroupArgs = botMock.sendMediaGroup.mock.calls[0];
+        expect(mediaGroupArgs[0]).toBe('12345'); // chatId
+        expect(mediaGroupArgs[1]).toHaveLength(2); // 2 photos grouped
+        expect(mediaGroupArgs[1][0].type).toBe('photo');
+        expect(mediaGroupArgs[1][1].type).toBe('photo');
+
+        expect(botMock.sendDocument).toHaveBeenCalledTimes(1);
+        const docArgs = botMock.sendDocument.mock.calls[0];
+        expect(docArgs[3].filename).toBe('doc.pdf'); // the pdf sent separately
+
+        expect(botMock.sendPhoto).not.toHaveBeenCalled();
+    });
+
+    it('should send a single photo individually without grouping', async () => {
+        const notifier = new TelegramNotifier('dummy_token');
+        const botMock = {
+            sendMessage: vi.fn(),
+            sendMediaGroup: vi.fn(),
+            sendDocument: vi.fn(),
+            sendPhoto: vi.fn().mockResolvedValue({}),
+            on: vi.fn(),
+            onText: vi.fn()
+        };
+        (notifier as any).bot = botMock;
+
+        const payload: NotificationPayload = {
+            host: 'https://jira.example.com',
+            issueKey: 'TEST-125',
+            summary: 'Test single photo',
+            status: 'To Do',
+            assignee: 'John',
+            diffs: [],
+            detectedAt: new Date(),
+            stabilizedAt: new Date(),
+            userTimezone: 'UTC',
+            attachments: [
+                { filename: 'alone.jpg', buffer: Buffer.from('alone') }
+            ]
+        };
+
+        await notifier.notify(payload, '12345');
+
+        expect(botMock.sendMediaGroup).not.toHaveBeenCalled();
+        expect(botMock.sendPhoto).toHaveBeenCalledTimes(1);
+        expect(botMock.sendPhoto.mock.calls[0][3].filename).toBe('alone.jpg');
+    });
+});

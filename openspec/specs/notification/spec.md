@@ -12,12 +12,12 @@ The bot MUST accept a Telegram Bot Token via environment variable `TELEGRAM_BOT_
 - **THEN** it initializes the Telegram client.
 
 ### Requirement: Telegram Notification
-The bot MUST send notifications to the configured Telegram Chat ID. The notification MUST include: Issue Key, Summary, Changed fields, and Timestamp. The Timestamp MUST be formatted in a human-readable layout according to the user's configured timezone, avoiding raw ISO date strings. Technical fields like "Stable since" should be omitted to prioritize readability. Any long text fields like "Comment" or "Description" MUST NOT be arbitrarily truncated to short lengths (e.g. 150 characters), but MUST be fully rendered. If a message exceeds Telegram's maximum character limit (4096 characters), the bot MUST handle it gracefully (e.g., by splitting the message or adding a truncation notice at the very end). The bot MUST also support rendering and delivering attachments downloaded from Jira directly into the chat (using `sendDocument` or `sendPhoto`). The bot MAY attach an inline keyboard to the notification to afford Quick Actions.
+The bot MUST send notifications to the configured Telegram Chat ID. The notification MUST include: Issue Key, Summary, Changed fields, and Timestamp. The bot MUST support rendering and delivering attachments downloaded from Jira directly into the chat. When multiple attachments are present, the bot SHOULD group compatible media (e.g. images) into a single Telegram album/media group message to reduce chat noise, rather than sending each file as an individual message.
 
-#### Scenario: Include Quick Action Buttons
-- **GIVEN** a Jira issue notification is generated
-- **WHEN** the bot formats and sends the message
-- **THEN** it includes an inline keyboard with buttons for `[💬 Comment]`, `[👤 Assign to Me]`, and `[▶️ Transition Status]`.
+#### Scenario: Multiple Image Attachments
+- **GIVEN** a Jira notification with 3 image attachments
+- **WHEN** the bot delivers the notification to Telegram
+- **THEN** it sends the text notification first, followed by a single grouped media message (album) containing all 3 images.
 
 ### Requirement: Error Handling
 The bot MUST log an error to the console if sending a Telegram message fails, but must not crash.

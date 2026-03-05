@@ -107,12 +107,61 @@ export class TelegramNotifier implements Notifier {
 
         // Send attachments if any
         if (payload.attachments && payload.attachments.length > 0) {
+            const photoVideos: { type: 'photo' | 'video', media: Buffer, filename: string }[] = [];
+            const others: { buffer: Buffer; filename: string }[] = [];
+
             for (const attachment of payload.attachments) {
+                const ext = attachment.filename.split('.').pop()?.toLowerCase();
+                if (ext && ['png', 'jpg', 'jpeg'].includes(ext)) {
+                    photoVideos.push({ type: 'photo', media: attachment.buffer, filename: attachment.filename });
+                } else if (ext && ['mp4', 'mov'].includes(ext)) {
+                    photoVideos.push({ type: 'video', media: attachment.buffer, filename: attachment.filename });
+                } else {
+                    others.push(attachment);
+                }
+            }
+
+            if (photoVideos.length > 1) {
+                const mediaGroup = photoVideos.map(pv => ({
+                    type: pv.type,
+                    media: pv.media,
+                }));
+                try {
+                    await this.bot.sendMediaGroup(chatId, mediaGroup as any);
+                } catch (error) {
+                    console.error(`[Telegram] Failed to send media group to ${chatId}:`, (error as Error).message);
+                    // Fallback to sending individually
+                    for (const pv of photoVideos) {
+                        try {
+                            if (pv.type === 'photo') {
+                                await this.bot.sendPhoto(chatId, pv.media, {}, { filename: pv.filename });
+                            } else {
+                                await this.bot.sendVideo(chatId, pv.media, {}, { filename: pv.filename });
+                            }
+                        } catch (fallbackError) {
+                            console.error(`[Telegram] Fallback failed for ${pv.filename}:`, (fallbackError as Error).message);
+                        }
+                    }
+                }
+            } else if (photoVideos.length === 1) {
+                const pv = photoVideos[0];
+                try {
+                    if (pv.type === 'photo') {
+                        await this.bot.sendPhoto(chatId, pv.media, {}, { filename: pv.filename });
+                    } else {
+                        await this.bot.sendVideo(chatId, pv.media, {}, { filename: pv.filename });
+                    }
+                } catch (error) {
+                    console.error(`[Telegram] Failed to send single media ${pv.filename}:`, (error as Error).message);
+                }
+            }
+
+            for (const attachment of others) {
                 try {
                     await this.bot.sendDocument(chatId, attachment.buffer, {}, { filename: attachment.filename });
                 } catch (error) {
                     console.error(
-                        `[Telegram] Failed to send attachment ${attachment.filename} to ${chatId}:`,
+                        `[Telegram] Failed to send document ${attachment.filename} to ${chatId}:`,
                         (error as Error).message,
                     );
                 }
