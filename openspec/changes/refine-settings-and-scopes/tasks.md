@@ -1,0 +1,7 @@
+- [ ] 1. Update the `user-management` spec to reflect the new `AND` logic requirement between Relationship Scopes and Project Scopes.
+- [ ] 2. Update `buildJql` in `src/services/telegram.ts` to combine Relationship Scopes and Project Scopes with an `AND` operator instead of `OR`. Update `telegram.test.ts` to verify the new exact JQL structures.
+- [ ] 3. Refactor `TelegramNotifier` in `src/services/telegram.ts` to split the settings into a main menu and sub-menus. Define new callback data like `menu_main`, `menu_relationships`, `menu_prefs`.
+- [ ] 4. Implement `showRelationshipsMenu` and `showPreferencesMenu` methods, copying the toggles from the old main menu into these distinct views, complete with `[⬅️ Back to Settings]` buttons.
+- [ ] 5. Update callback handlers in `bot.on('callback_query')` to catch the new menu navigation buttons and route them to the correct display methods.
+- [ ] 6. Run unit tests (`npm run test`) to ensure everything passes with the new JQL logic.
+- [ ] 7. Request manual review to test the new settings layout and verify JQL string output in Telegram via the `/jql` command.

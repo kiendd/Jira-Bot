@@ -61,6 +61,28 @@ export class JiraClient {
     }
 
     /**
+     * Get all accessible projects.
+     */
+    async getAllProjects(): Promise<{ key: string; name: string }[]> {
+        try {
+            // jira.js version 2 Projects interface is problematic for fetching all projects.
+            // Using the underlying axios instance to make a direct REST API call.
+            const response = await (this.client as any).sendRequest({
+                url: '/rest/api/2/project',
+                method: 'GET'
+            });
+            const projects = response || [];
+            return projects.map((p: any) => ({
+                key: p.key,
+                name: p.name
+            }));
+        } catch (error) {
+            console.error('[JiraClient] Failed to fetch projects:', (error as Error).message);
+            return [];
+        }
+    }
+
+    /**
      * Search issues using JQL. Handles pagination automatically.
      */
     async searchIssues(jql: string): Promise<JiraIssue[]> {

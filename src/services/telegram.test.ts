@@ -14,8 +14,23 @@ describe('buildJql', () => {
 
     it('should combine all scopes with OR', () => {
         const scopes = { assigned: true, created: true, participated: true, watched: true };
-        const jql = buildJql(scopes, 'test@example.com');
+        const jql = buildJql(scopes, [], 'test@example.com');
         expect(jql).toBe('(assignee = currentUser() OR reporter = currentUser() OR issue in updatedBy("test@example.com") OR issue in watchedIssues()) AND updated > -1d');
+    });
+
+    it('should include project scopes', () => {
+        const scopes = { assigned: false, created: false, participated: false, watched: false };
+        let jql = buildJql(scopes, ['PROJ1'], 'test@example.com');
+        expect(jql).toBe('project in ("PROJ1") AND updated > -1d');
+
+        jql = buildJql(scopes, ['PROJ1', 'PROJ2'], 'test@example.com');
+        expect(jql).toBe('(project in ("PROJ1", "PROJ2")) AND updated > -1d');
+    });
+
+    it('should combine relationship and project scopes with OR', () => {
+        const scopes = { assigned: true, created: false, participated: false, watched: false };
+        const jql = buildJql(scopes, ['PROJ1'], 'test@example.com');
+        expect(jql).toBe('((assignee = currentUser()) OR project in ("PROJ1")) AND updated > -1d');
     });
 });
 

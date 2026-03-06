@@ -30,12 +30,25 @@ The system MUST persist user configurations across restarts.
 - **THEN** it automatically resumes monitoring for User A without requiring re-registration.
 
 ### Requirement: Command Interface
-The bot MUST support commands to manage the session, user preferences, and issue tracking scope. The bot MUST allow users to interactively view and toggle subscriptions to specific Jira projects using inline keyboards.
+The bot MUST support commands to manage the session, user preferences, and issue tracking scope.
 
-#### Scenario: Scope Configuration Menu with Projects
+#### Scenario: Scope Configuration Menu with Relationships
 - **GIVEN** an active user
-- **WHEN** they open the settings menu and navigate to the project selection
-- **THEN** the bot fetches the list of available projects from Jira AND displays them as toggleable inline buttons.
-- **AND WHEN** the user toggles a project
-- **THEN** the bot updates their `projectScopes` preferences AND rebuilds their tracking JQL to include the selected projects combined with their relationship scopes using `OR` logic.
+- **WHEN** they send `/settings`
+- **THEN** the interactive menu includes quick-filter buttons for standard relationship scopes: "Assigned to Me", "Created by Me", "Participated", and "Watched".
 
+#### Scenario: Human-Readable Scope
+- **GIVEN** a user configures their scope to include "Participated" and "Watched" via the settings menu
+- **WHEN** they run the `/status` command
+- **THEN** the bot displays the human-readable Scope title combined, e.g., "🎯 Participated, 👁️ Watched" reflecting their chosen relationships.
+
+## MODIFIED Requirements
+### Requirement: Command Interface (Project Subscriptions & JQL Logic)
+The bot MUST allow users to select specific Jira projects to monitor.
+When both Relationship Scopes and Project Scopes are defined, the system MUST combine them using logical `AND`.
+
+#### Scenario: Project Subscription Isolation
+- **GIVEN** a user has configured "Assigned to Me" and selected project "PROJ1"
+- **WHEN** the bot builds the JQL for monitoring
+- **THEN** the JQL enforces an `AND` intersection: `(assignee = currentUser()) AND project in ("PROJ1") AND updated > -1d`.
+- **AND** the user does not receive notifications for unassigned issues in "PROJ1".

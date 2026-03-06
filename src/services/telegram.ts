@@ -4,7 +4,7 @@ import { User, IUser } from '../models/user';
 import { encrypt, decrypt } from './encryption';
 import { JiraClient } from './jira-client';
 
-export function buildJql(scopes: any, email?: string): string {
+export function buildJql(scopes: any, projectScopes: string[] = [], email?: string): string {
     const parts: string[] = [];
     if (scopes.assigned) parts.push('assignee = currentUser()');
     if (scopes.created) parts.push('reporter = currentUser()');
@@ -17,18 +17,36 @@ export function buildJql(scopes: any, email?: string): string {
     }
     if (scopes.watched) parts.push('issue in watchedIssues()');
 
-    if (parts.length === 0) {
+    let baseQuery = '';
+    if (parts.length > 0) {
+        baseQuery = `(${parts.join(' OR ')})`;
+    }
+
+    let projectQuery = '';
+    if (projectScopes && projectScopes.length > 0) {
+        const quotedProjects = projectScopes.map(p => `"${p}"`);
+        projectQuery = projectScopes.length > 1 ? `(project in (${quotedProjects.join(', ')}))` : `project in (${quotedProjects.join(', ')})`;
+    }
+
+    const combinedQueryParts: string[] = [];
+    if (baseQuery) combinedQueryParts.push(baseQuery);
+    if (projectQuery) combinedQueryParts.push(projectQuery);
+
+    if (combinedQueryParts.length === 0) {
         return 'updated > -1d';
     }
 
-    return `(${parts.join(' OR ')}) AND updated > -1d`;
+    const combinedString = combinedQueryParts.length > 1 ? `(${combinedQueryParts.join(' OR ')})` : combinedQueryParts[0];
+
+    return `${combinedString} AND updated > -1d`;
 }
 
 export function getScopeLabel(user: IUser): string {
     const scopes = user.preferences?.relationshipScopes;
+    const projectScopes = user.preferences?.projectScopes || [];
     if (!scopes) return '⚙️ Custom JQL';
 
-    const expectedJql = buildJql(scopes, user.jiraEmail);
+    const expectedJql = buildJql(scopes, projectScopes, user.jiraEmail);
     if (user.jql !== expectedJql) {
         return '⚙️ Custom JQL';
     }
@@ -38,6 +56,10 @@ export function getScopeLabel(user: IUser): string {
     if (scopes.created) labels.push('📝 Created by Me');
     if (scopes.participated) labels.push('🎯 Participated');
     if (scopes.watched) labels.push('👁️ Watched');
+
+    if (projectScopes.length > 0) {
+        labels.push(`📁 ${projectScopes.length} Project(s)`);
+    }
 
     if (labels.length === 0) return '🌐 All Updates';
     return labels.join(', ');
@@ -250,7 +272,7 @@ export class TelegramNotifier implements Notifier {
             }
 
             const [host, email, token, ...jqlParts] = args;
-            const jql = jqlParts.length > 0 ? jqlParts.join(' ') : buildJql({ assigned: true, created: true, participated: false, watched: false }, email);
+            const jql = jqlParts.length > 0 ? jqlParts.join(' ') : buildJql({ assigned: true, created: true, participated: false, watched: false }, [], email);
 
             // Encrypt the token if encryption key is available
             const storedToken = this.encryptionKey
@@ -400,16 +422,65 @@ export class TelegramNotifier implements Notifier {
                     return;
                 } else if (data === 'scope_assigned') {
                     user.preferences.relationshipScopes.assigned = !user.preferences.relationshipScopes.assigned;
-                    user.jql = buildJql(user.preferences.relationshipScopes, user.jiraEmail);
+                    user.jql = buildJql(user.preferences.relationshipScopes, user.preferences.projectScopes || [], user.jiraEmail);
                 } else if (data === 'scope_created') {
                     user.preferences.relationshipScopes.created = !user.preferences.relationshipScopes.created;
-                    user.jql = buildJql(user.preferences.relationshipScopes, user.jiraEmail);
+                    user.jql = buildJql(user.preferences.relationshipScopes, user.preferences.projectScopes || [], user.jiraEmail);
                 } else if (data === 'scope_participated') {
                     user.preferences.relationshipScopes.participated = !user.preferences.relationshipScopes.participated;
-                    user.jql = buildJql(user.preferences.relationshipScopes, user.jiraEmail);
+                    user.jql = buildJql(user.preferences.relationshipScopes, user.preferences.projectScopes || [], user.jiraEmail);
                 } else if (data === 'scope_watched') {
                     user.preferences.relationshipScopes.watched = !user.preferences.relationshipScopes.watched;
-                    user.jql = buildJql(user.preferences.relationshipScopes, user.jiraEmail);
+                    user.jql = buildJql(user.preferences.relationshipScopes, user.preferences.projectScopes || [], user.jiraEmail);
+                } else if (data === 'select_projects') {
+                    await this.bot.answerCallbackQuery(query.id);
+                    await this.showProjectMenu(chatId, messageId, user);
+                    return;
+                } else if (data === 'toggle_all_proj') {
+                    let apiToken = user.jiraApiToken;
+                    if (this.encryptionKey) {
+                        try { apiToken = decrypt(apiToken, this.encryptionKey); } catch (e) { }
+                    }
+                    const jiraClient = new JiraClient(user.jiraHost, user.jiraEmail, apiToken);
+                    const projects = await jiraClient.getAllProjects();
+                    const allProjectKeys = projects.map(p => p.key);
+                    const currentScopes = user.preferences.projectScopes || [];
+
+                    if (currentScopes.length === allProjectKeys.length && allProjectKeys.length > 0) {
+                        user.preferences.projectScopes = [];
+                    } else {
+                        user.preferences.projectScopes = allProjectKeys;
+                    }
+                    user.jql = buildJql(user.preferences.relationshipScopes, user.preferences.projectScopes, user.jiraEmail);
+                    await user.save();
+
+                    await this.bot.answerCallbackQuery(query.id, { text: `Project selection updated!` });
+                    await this.showProjectMenu(chatId, messageId, user);
+                    return;
+                } else if (data.startsWith('toggle_proj_')) {
+                    const projKey = data.replace('toggle_proj_', '');
+                    const currentScopes = user.preferences.projectScopes || [];
+                    if (currentScopes.includes(projKey)) {
+                        user.preferences.projectScopes = currentScopes.filter(k => k !== projKey);
+                    } else {
+                        user.preferences.projectScopes = [...currentScopes, projKey];
+                    }
+                    user.jql = buildJql(user.preferences.relationshipScopes, user.preferences.projectScopes, user.jiraEmail);
+                    await user.save();
+
+                    await this.bot.answerCallbackQuery(query.id, { text: `Project ${projKey} updated!` });
+                    await this.showProjectMenu(chatId, messageId, user);
+                    return;
+                } else if (data === 'back_to_settings') {
+                    await this.bot.answerCallbackQuery(query.id);
+                    const { text, replyMarkup } = this.buildSettingsMenu(user);
+                    await this.bot.editMessageText(text, {
+                        chat_id: chatId,
+                        message_id: messageId,
+                        reply_markup: replyMarkup,
+                        parse_mode: 'HTML',
+                    });
+                    return;
                 } else if (data.startsWith('comment_')) {
                     const issueKey = data.split('_')[1];
                     await this.bot.answerCallbackQuery(query.id);
@@ -601,6 +672,7 @@ export class TelegramNotifier implements Notifier {
             trackStatus: true,
             trackAssignee: true,
             relationshipScopes: { assigned: true, created: true, participated: false, watched: false },
+            projectScopes: [],
             schedule: { timezone: 'UTC', startTime: '00:00', endTime: '23:59' }
         };
 
@@ -608,6 +680,7 @@ export class TelegramNotifier implements Notifier {
         const assigneeIcon = p.trackAssignee ? '✅' : '❌';
 
         const scopes = p.relationshipScopes || { assigned: true, created: true, participated: false, watched: false };
+        const projectScopesCount = p.projectScopes ? p.projectScopes.length : 0;
 
         const scopeLabel = getScopeLabel(user);
 
@@ -627,6 +700,9 @@ export class TelegramNotifier implements Notifier {
                     { text: `${scopes.watched ? '✅' : '❌'} Watched`, callback_data: 'scope_watched' },
                 ],
                 [
+                    { text: `📁 Select Projects (${projectScopesCount})`, callback_data: 'select_projects' }
+                ],
+                [
                     { text: `${statusIcon} Track Status`, callback_data: 'toggle_status' },
                     { text: `${assigneeIcon} Track Assignee`, callback_data: 'toggle_assignee' }
                 ],
@@ -637,6 +713,59 @@ export class TelegramNotifier implements Notifier {
         };
 
         return { text, replyMarkup };
+    }
+
+    private async showProjectMenu(chatId: string, messageId: number, user: any) {
+        let apiToken = user.jiraApiToken;
+        if (this.encryptionKey) {
+            try { apiToken = decrypt(apiToken, this.encryptionKey); } catch (e) { }
+        }
+
+        const jiraClient = new JiraClient(user.jiraHost, user.jiraEmail, apiToken);
+        const projects = await jiraClient.getAllProjects();
+        const activeProjects = user.preferences.projectScopes || [];
+
+        let text = `📂 <b>Project Subscriptions</b>\n\nSelect the projects you want to monitor closely:\n`;
+
+        const inline_keyboard: any[][] = [];
+
+        if (projects.length === 0) {
+            text += `\n<i>Could not load projects. Ensure your Jira credentials are valid.</i>`;
+        } else {
+            const allSelected = activeProjects.length === projects.length && projects.length > 0;
+            const toggleAllIcon = allSelected ? '❌ Deselect All' : '✅ Select All';
+            inline_keyboard.push([{ text: toggleAllIcon, callback_data: 'toggle_all_proj' }]);
+
+            // Render buttons row by row (2 per row for better mobile display)
+            let currentRow: any[] = [];
+            projects.forEach((proj: any) => {
+                const isActive = activeProjects.includes(proj.key);
+                const icon = isActive ? '✅' : '❌';
+                currentRow.push({
+                    text: `${icon} ${proj.key}`,
+                    callback_data: `toggle_proj_${proj.key}`
+                });
+                if (currentRow.length === 2) {
+                    inline_keyboard.push(currentRow);
+                    currentRow = [];
+                }
+            });
+            if (currentRow.length > 0) {
+                inline_keyboard.push(currentRow);
+            }
+        }
+
+        // Add back button
+        inline_keyboard.push([
+            { text: '⬅️ Back to Settings', callback_data: 'back_to_settings' }
+        ]);
+
+        await this.bot.editMessageText(text, {
+            chat_id: chatId,
+            message_id: messageId,
+            reply_markup: { inline_keyboard },
+            parse_mode: 'HTML'
+        });
     }
 
     private formatMessage(payload: NotificationPayload): string[] {
