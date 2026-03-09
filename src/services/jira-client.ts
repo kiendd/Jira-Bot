@@ -1,4 +1,8 @@
 import { Version2Client } from 'jira.js';
+import NodeCache from 'node-cache';
+
+// Shared in-memory cache instance (default TTL 5 minutes)
+const apiCache = new NodeCache({ stdTTL: 300, checkperiod: 60 });
 
 export interface JiraChangelogItem {
     field?: string;
@@ -27,8 +31,10 @@ export interface JiraIssue {
 
 export class JiraClient {
     private client: Version2Client;
+    private userIgnoredFields: string[];
 
-    constructor(host: string, email: string, apiToken: string) {
+    constructor(host: string, email: string, apiToken: string, userIgnoredFields: string[] = []) {
+        this.userIgnoredFields = userIgnoredFields.map(f => f.toLowerCase());
         // Remove trailing slashes from host
         const cleanHost = host.replace(/\/+$/, '');
         const isCloud = cleanHost.includes('.atlassian.net');
@@ -64,6 +70,10 @@ export class JiraClient {
      * Get all accessible projects.
      */
     async getAllProjects(): Promise<{ key: string; name: string }[]> {
+        const cacheKey = `projects_${(this.client as any).config.host}_${((this.client as any).config.authentication as any)?.basic?.email || ((this.client as any).config.authentication as any)?.personalAccessToken}`;
+        const cached = apiCache.get<{ key: string; name: string }[]>(cacheKey);
+        if (cached) return cached;
+
         try {
             // jira.js version 2 Projects interface is problematic for fetching all projects.
             // Using the underlying axios instance to make a direct REST API call.
@@ -72,10 +82,12 @@ export class JiraClient {
                 method: 'GET'
             });
             const projects = response || [];
-            return projects.map((p: any) => ({
+            const result = projects.map((p: any) => ({
                 key: p.key,
                 name: p.name
             }));
+            apiCache.set(cacheKey, result, 300); // 5 min
+            return result;
         } catch (error) {
             console.error('[JiraClient] Failed to fetch projects:', (error as Error).message);
             return [];
@@ -86,6 +98,10 @@ export class JiraClient {
      * Search issues using JQL. Handles pagination automatically.
      */
     async searchIssues(jql: string): Promise<JiraIssue[]> {
+        const cacheKey = `search_${(this.client as any).config.host}_${((this.client as any).config.authentication as any)?.basic?.email || ((this.client as any).config.authentication as any)?.personalAccessToken}_${jql}`;
+        const cached = apiCache.get<JiraIssue[]>(cacheKey);
+        if (cached) return cached;
+
         const allIssues: JiraIssue[] = [];
         let startAt = 0;
         const maxResults = 50;
@@ -169,6 +185,7 @@ export class JiraClient {
             if (issues.length < maxResults) break;
         }
 
+        apiCache.set(cacheKey, allIssues, 15); // 15 sec TTL coalesces multiple rapid polls
         return allIssues;
     }
 
@@ -186,14 +203,17 @@ export class JiraClient {
             'lastViewed', 'updated', 'created', 'resolutiondate',
             'status', 'summary', 'assignee', 'Attachment', 'comment',
             'project', 'issuetype', 'reporter', 'creator',
-            'issuelinks', 'subtasks'
+            'issuelinks', 'subtasks',
+            'resolution', 'security',
+            'rank', 'work ratio', 'sprint', 'epic link', 'components', 'component/s',
+            ...this.userIgnoredFields
         ]);
 
         for (const [key, value] of Object.entries(fields)) {
-            if (value == null || value === '' || blocklist.has(key)) continue;
+            if (value == null || value === '' || blocklist.has(key.toLowerCase())) continue;
 
             const name = namesMap[key] || key;
-            if (blocklist.has(name) || name === 'Attachment' || name === 'Description') continue;
+            if (blocklist.has(name.toLowerCase()) || name === 'Attachment' || name === 'Description') continue;
 
             let stringValue = '';
 
@@ -320,14 +340,20 @@ export class JiraClient {
      * Get available transitions for an issue.
      */
     async getTransitions(issueKey: string): Promise<{ id: string; name: string }[]> {
+        const cacheKey = `transitions_${(this.client as any).config.host}_${((this.client as any).config.authentication as any)?.basic?.email || ((this.client as any).config.authentication as any)?.personalAccessToken}_${issueKey}`;
+        const cached = apiCache.get<{ id: string; name: string }[]>(cacheKey);
+        if (cached) return cached;
+
         try {
             const result = await this.client.issues.getTransitions({
                 issueIdOrKey: issueKey
             });
-            return (result.transitions || []).map(t => ({
+            const transitions = (result.transitions || []).map(t => ({
                 id: t.id!,
                 name: t.name!
             }));
+            apiCache.set(cacheKey, transitions, 300); // 5 min
+            return transitions;
         } catch (error) {
             console.error(`[JiraClient] Failed to get transitions for ${issueKey}:`, (error as Error).message);
             return [];

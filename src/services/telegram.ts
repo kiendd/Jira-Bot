@@ -8,13 +8,14 @@ export function buildJql(scopes: any, projectScopes: string[] = [], email?: stri
     const parts: string[] = [];
     if (scopes.assigned) parts.push('assignee = currentUser()');
     if (scopes.created) parts.push('reporter = currentUser()');
-    if (scopes.participated) {
-        if (email) {
-            parts.push(`issue in updatedBy("${email}")`);
-        } else {
-            parts.push('issue in updatedBy(currentUser())');
-        }
-    }
+    // User requested to remove "issue in updatedBy" because it causes too much noise
+    // if (scopes.participated) {
+    //     if (email) {
+    //         parts.push(`issue in updatedBy("${email}")`);
+    //     } else {
+    //         parts.push('issue in updatedBy(currentUser())');
+    //     }
+    // }
     if (scopes.watched) parts.push('issue in watchedIssues()');
 
     let baseQuery = '';
@@ -36,7 +37,7 @@ export function buildJql(scopes: any, projectScopes: string[] = [], email?: stri
         return 'updated > -1d';
     }
 
-    const combinedString = combinedQueryParts.length > 1 ? `(${combinedQueryParts.join(' OR ')})` : combinedQueryParts[0];
+    const combinedString = combinedQueryParts.length > 1 ? `(${combinedQueryParts.join(' AND ')})` : combinedQueryParts[0];
 
     return `${combinedString} AND updated > -1d`;
 }
@@ -389,6 +390,35 @@ export class TelegramNotifier implements Notifier {
             console.log(`[Telegram] User ${chatId} updated JQL.`);
         });
 
+        // /ignore <field>
+        this.bot.onText(/\/ignore(.+)?/, async (msg, match) => {
+            const chatId = msg.chat.id.toString();
+            const user = await User.findOne({ chatId });
+            if (!user) {
+                await this.bot.sendMessage(chatId, '⚠️ You are not registered. Use /setup first.');
+                return;
+            }
+
+            const field = match?.[1]?.trim();
+            if (!field) {
+                await this.bot.sendMessage(chatId, 'Usage: /ignore <field_name>\nExample: /ignore Story Points');
+                return;
+            }
+
+            if (!user.preferences.ignoredFields) {
+                user.preferences.ignoredFields = [];
+            }
+
+            if (user.preferences.ignoredFields.map(f => f.toLowerCase()).includes(field.toLowerCase())) {
+                await this.bot.sendMessage(chatId, `⚠️ "${field}" is already in your ignored fields list.`);
+                return;
+            }
+
+            user.preferences.ignoredFields.push(field);
+            await user.save();
+            await this.bot.sendMessage(chatId, `✅ Added "${field}" to your ignored fields! Use /settings -> Preferences -> Ignored Fields to manage.`);
+        });
+
         // /settings
         this.bot.onText(/\/settings/, async (msg) => {
             const chatId = msg.chat.id.toString();
@@ -410,28 +440,51 @@ export class TelegramNotifier implements Notifier {
                     return;
                 }
 
-                if (data === 'toggle_status') {
+                let menuToRefresh = '';
+
+                if (data === 'menu_relationships') {
+                    menuToRefresh = 'relationships';
+                } else if (data === 'menu_prefs') {
+                    menuToRefresh = 'preferences';
+                } else if (data === 'back_to_settings') {
+                    menuToRefresh = 'main';
+                } else if (data === 'toggle_status') {
                     user.preferences.trackStatus = !user.preferences.trackStatus;
+                    menuToRefresh = 'preferences';
                 } else if (data === 'toggle_assignee') {
                     user.preferences.trackAssignee = !user.preferences.trackAssignee;
+                    menuToRefresh = 'preferences';
                 } else if (data === 'set_timezone') {
                     await this.bot.answerCallbackQuery(query.id, {
                         text: 'To set timezone, use: /tz <timezone> (e.g., /tz Asia/Ho_Chi_Minh)',
                         show_alert: true
                     });
                     return;
+                } else if (data === 'manage_ignored_fields') {
+                    menuToRefresh = 'ignored_fields';
+                } else if (data.startsWith('unignore_')) {
+                    const idx = parseInt(data.replace('unignore_', ''), 10);
+                    if (!isNaN(idx) && user.preferences.ignoredFields && idx < user.preferences.ignoredFields.length) {
+                        const removed = user.preferences.ignoredFields.splice(idx, 1);
+                        await this.bot.answerCallbackQuery(query.id, { text: `Removed ${removed[0]} from ignored fields.` });
+                    }
+                    menuToRefresh = 'ignored_fields';
                 } else if (data === 'scope_assigned') {
                     user.preferences.relationshipScopes.assigned = !user.preferences.relationshipScopes.assigned;
                     user.jql = buildJql(user.preferences.relationshipScopes, user.preferences.projectScopes || [], user.jiraEmail);
+                    menuToRefresh = 'relationships';
                 } else if (data === 'scope_created') {
                     user.preferences.relationshipScopes.created = !user.preferences.relationshipScopes.created;
                     user.jql = buildJql(user.preferences.relationshipScopes, user.preferences.projectScopes || [], user.jiraEmail);
+                    menuToRefresh = 'relationships';
                 } else if (data === 'scope_participated') {
                     user.preferences.relationshipScopes.participated = !user.preferences.relationshipScopes.participated;
                     user.jql = buildJql(user.preferences.relationshipScopes, user.preferences.projectScopes || [], user.jiraEmail);
+                    menuToRefresh = 'relationships';
                 } else if (data === 'scope_watched') {
                     user.preferences.relationshipScopes.watched = !user.preferences.relationshipScopes.watched;
                     user.jql = buildJql(user.preferences.relationshipScopes, user.preferences.projectScopes || [], user.jiraEmail);
+                    menuToRefresh = 'relationships';
                 } else if (data === 'select_projects') {
                     await this.bot.answerCallbackQuery(query.id);
                     await this.showProjectMenu(chatId, messageId, user);
@@ -441,7 +494,7 @@ export class TelegramNotifier implements Notifier {
                     if (this.encryptionKey) {
                         try { apiToken = decrypt(apiToken, this.encryptionKey); } catch (e) { }
                     }
-                    const jiraClient = new JiraClient(user.jiraHost, user.jiraEmail, apiToken);
+                    const jiraClient = new JiraClient(user.jiraHost, user.jiraEmail, apiToken, user.preferences?.ignoredFields);
                     const projects = await jiraClient.getAllProjects();
                     const allProjectKeys = projects.map(p => p.key);
                     const currentScopes = user.preferences.projectScopes || [];
@@ -471,16 +524,6 @@ export class TelegramNotifier implements Notifier {
                     await this.bot.answerCallbackQuery(query.id, { text: `Project ${projKey} updated!` });
                     await this.showProjectMenu(chatId, messageId, user);
                     return;
-                } else if (data === 'back_to_settings') {
-                    await this.bot.answerCallbackQuery(query.id);
-                    const { text, replyMarkup } = this.buildSettingsMenu(user);
-                    await this.bot.editMessageText(text, {
-                        chat_id: chatId,
-                        message_id: messageId,
-                        reply_markup: replyMarkup,
-                        parse_mode: 'HTML',
-                    });
-                    return;
                 } else if (data.startsWith('comment_')) {
                     const issueKey = data.split('_')[1];
                     await this.bot.answerCallbackQuery(query.id);
@@ -497,7 +540,7 @@ export class TelegramNotifier implements Notifier {
                     if (this.encryptionKey) {
                         try { apiToken = decrypt(apiToken, this.encryptionKey); } catch (e) { }
                     }
-                    const jiraClient = new JiraClient(user.jiraHost, user.jiraEmail, apiToken);
+                    const jiraClient = new JiraClient(user.jiraHost, user.jiraEmail, apiToken, user.preferences?.ignoredFields);
                     const accountId = await jiraClient.getCurrentUserAccountId();
                     if (accountId) {
                         const success = await jiraClient.assignIssue(issueKey, accountId);
@@ -515,7 +558,7 @@ export class TelegramNotifier implements Notifier {
                     if (this.encryptionKey) {
                         try { apiToken = decrypt(apiToken, this.encryptionKey); } catch (e) { }
                     }
-                    const jiraClient = new JiraClient(user.jiraHost, user.jiraEmail, apiToken);
+                    const jiraClient = new JiraClient(user.jiraHost, user.jiraEmail, apiToken, user.preferences?.ignoredFields);
                     const transitions = await jiraClient.getTransitions(issueKey);
 
                     if (transitions.length === 0) {
@@ -540,7 +583,7 @@ export class TelegramNotifier implements Notifier {
                     if (this.encryptionKey) {
                         try { apiToken = decrypt(apiToken, this.encryptionKey); } catch (e) { }
                     }
-                    const jiraClient = new JiraClient(user.jiraHost, user.jiraEmail, apiToken);
+                    const jiraClient = new JiraClient(user.jiraHost, user.jiraEmail, apiToken, user.preferences?.ignoredFields);
                     const success = await jiraClient.transitionIssue(issueKey, transitionId);
 
                     await this.bot.answerCallbackQuery(query.id, {
@@ -565,23 +608,37 @@ export class TelegramNotifier implements Notifier {
                     return;
                 } else if (data === 'cancel_transition') {
                     await this.bot.answerCallbackQuery(query.id);
-                    // We don't have the issueKey directly in the cancel data, but we can't easily restore the exact previous keyboard without it. 
-                    // To keep it simple, we just clear the keyboard or try to parse the message text to find the issue key, but clearing is safer.
                     await this.bot.editMessageReplyMarkup({ inline_keyboard: [] }, { chat_id: chatId, message_id: messageId });
                     return;
                 }
 
-                await user.save();
-                await this.bot.answerCallbackQuery(query.id, { text: 'Settings updated!' });
+                if (menuToRefresh) {
+                    await user.save();
+                    try {
+                        await this.bot.answerCallbackQuery(query.id);
+                    } catch (e) {
+                        // ignore answerCallbackQuery errors
+                    }
 
-                // Refresh the menu
-                const { text, replyMarkup } = this.buildSettingsMenu(user);
-                await this.bot.editMessageText(text, {
-                    chat_id: chatId,
-                    message_id: messageId,
-                    reply_markup: replyMarkup,
-                    parse_mode: 'HTML',
-                });
+                    let text, replyMarkup;
+                    if (menuToRefresh === 'relationships') {
+                        ({ text, replyMarkup } = this.buildRelationshipsMenu(user));
+                    } else if (menuToRefresh === 'preferences') {
+                        ({ text, replyMarkup } = this.buildPreferencesMenu(user));
+                    } else if (menuToRefresh === 'ignored_fields') {
+                        ({ text, replyMarkup } = this.buildIgnoredFieldsMenu(user));
+                    } else {
+                        ({ text, replyMarkup } = this.buildSettingsMenu(user));
+                    }
+
+                    await this.bot.editMessageText(text, {
+                        chat_id: chatId,
+                        message_id: messageId,
+                        reply_markup: replyMarkup,
+                        parse_mode: 'HTML',
+                    });
+                    return;
+                }
             } catch (error) {
                 console.error(`[Telegram] Error handling callback query:`, error);
                 await this.bot.answerCallbackQuery(query.id, { text: 'An error occurred.', show_alert: true });
@@ -635,7 +692,7 @@ export class TelegramNotifier implements Notifier {
                             try { apiToken = decrypt(apiToken, this.encryptionKey); } catch (e) { }
                         }
 
-                        const jiraClient = new JiraClient(user.jiraHost, user.jiraEmail, apiToken);
+                        const jiraClient = new JiraClient(user.jiraHost, user.jiraEmail, apiToken, user.preferences?.ignoredFields);
                         const success = await jiraClient.addComment(issueKey, commentBody);
 
                         if (success) {
@@ -676,12 +733,7 @@ export class TelegramNotifier implements Notifier {
             schedule: { timezone: 'UTC', startTime: '00:00', endTime: '23:59' }
         };
 
-        const statusIcon = p.trackStatus ? '✅' : '❌';
-        const assigneeIcon = p.trackAssignee ? '✅' : '❌';
-
-        const scopes = p.relationshipScopes || { assigned: true, created: true, participated: false, watched: false };
         const projectScopesCount = p.projectScopes ? p.projectScopes.length : 0;
-
         const scopeLabel = getScopeLabel(user);
 
         const text = `⚙️ <b>Notification Settings</b>\n\n` +
@@ -689,6 +741,20 @@ export class TelegramNotifier implements Notifier {
             `<b>Timezone:</b> ${p.schedule.timezone}\n` +
             `<b>Active Hours:</b> ${p.schedule.startTime} - ${p.schedule.endTime}`;
 
+        const replyMarkup = {
+            inline_keyboard: [
+                [{ text: `👥 Relationship Scopes`, callback_data: 'menu_relationships' }],
+                [{ text: `📁 Project Subscriptions (${projectScopesCount})`, callback_data: 'select_projects' }],
+                [{ text: `⚙️ Preferences`, callback_data: 'menu_prefs' }]
+            ]
+        };
+
+        return { text, replyMarkup };
+    }
+
+    private buildRelationshipsMenu(user: any) {
+        const scopes = user.preferences?.relationshipScopes || { assigned: true, created: true, participated: false, watched: false };
+        const text = `👥 <b>Relationship Scopes</b>\n\nSelect your relationship to the tasks you want to monitor:\n`;
         const replyMarkup = {
             inline_keyboard: [
                 [
@@ -699,20 +765,47 @@ export class TelegramNotifier implements Notifier {
                     { text: `${scopes.participated ? '✅' : '❌'} Participated`, callback_data: 'scope_participated' },
                     { text: `${scopes.watched ? '✅' : '❌'} Watched`, callback_data: 'scope_watched' },
                 ],
-                [
-                    { text: `📁 Select Projects (${projectScopesCount})`, callback_data: 'select_projects' }
-                ],
+                [{ text: '⬅️ Back to Settings', callback_data: 'back_to_settings' }]
+            ]
+        };
+        return { text, replyMarkup };
+    }
+
+    private buildPreferencesMenu(user: any) {
+        const p = user.preferences || { trackStatus: true, trackAssignee: true };
+        const statusIcon = p.trackStatus ? '✅' : '❌';
+        const assigneeIcon = p.trackAssignee ? '✅' : '❌';
+        const text = `⚙️ <b>Preferences</b>\n\nSelect your notification preferences:\n`;
+        const replyMarkup = {
+            inline_keyboard: [
                 [
                     { text: `${statusIcon} Track Status`, callback_data: 'toggle_status' },
                     { text: `${assigneeIcon} Track Assignee`, callback_data: 'toggle_assignee' }
                 ],
                 [
-                    { text: `🌐 Set Timezone`, callback_data: 'set_timezone' }
-                ]
+                    { text: `🌐 Set Timezone`, callback_data: 'set_timezone' },
+                    { text: `🚫 Ignored Fields`, callback_data: 'manage_ignored_fields' }
+                ],
+                [{ text: '⬅️ Back to Settings', callback_data: 'back_to_settings' }]
             ]
         };
-
         return { text, replyMarkup };
+    }
+
+    private buildIgnoredFieldsMenu(user: any) {
+        const ignored = user.preferences?.ignoredFields || [];
+        const text = `🚫 <b>Ignored Fields</b>\n\nThese Jira fields are completely stripped from your notifications to reduce clutter. Click to remove them, or type /ignore &lt;field name&gt; to add a new one.\n`;
+        const keyboard: any[][] = [];
+        for (let i = 0; i < ignored.length; i += 2) {
+            const row: any[] = [];
+            row.push({ text: `❌ ${ignored[i]}`, callback_data: `unignore_${i}` });
+            if (i + 1 < ignored.length) {
+                row.push({ text: `❌ ${ignored[i + 1]}`, callback_data: `unignore_${i + 1}` });
+            }
+            keyboard.push(row);
+        }
+        keyboard.push([{ text: '⬅️ Back to Preferences', callback_data: 'menu_prefs' }]);
+        return { text, replyMarkup: { inline_keyboard: keyboard } };
     }
 
     private async showProjectMenu(chatId: string, messageId: number, user: any) {
@@ -721,7 +814,7 @@ export class TelegramNotifier implements Notifier {
             try { apiToken = decrypt(apiToken, this.encryptionKey); } catch (e) { }
         }
 
-        const jiraClient = new JiraClient(user.jiraHost, user.jiraEmail, apiToken);
+        const jiraClient = new JiraClient(user.jiraHost, user.jiraEmail, apiToken, user.preferences?.ignoredFields);
         const projects = await jiraClient.getAllProjects();
         const activeProjects = user.preferences.projectScopes || [];
 

@@ -19,6 +19,11 @@ The bot MUST send notifications to the configured Telegram Chat ID. The notifica
 - **WHEN** the bot delivers the notification to Telegram
 - **THEN** it sends the text notification first, followed by a single grouped media message (album) containing all 3 images.
 
+#### Scenario: Filtering Noisy Fields
+- **GIVEN** a notification contains internal Jira fields like "Rank", "Sprint", "Work Ratio", or "Epic Link"
+- **WHEN** the bot processes the updated fields to display
+- **THEN** it MUST explicitly filter out those fields to prevent chat noise.
+
 ### Requirement: Error Handling
 The bot MUST log an error to the console if sending a Telegram message fails, but must not crash.
 
@@ -47,4 +52,13 @@ The bot MUST listen for callback queries from the interactive inline buttons. Wh
 - **GIVEN** an active Telegram notification with quick action buttons
 - **WHEN** the user clicks `[▶️ Transition Status]` for issue `TEST-123`
 - **THEN** the bot fetches the available transitions from Jira and edits the message's inline keyboard to display the available target statuses.
+
+### Requirement: Filter Noisy Fields on New Tasks
+The system MUST NOT include noisy internal Jira fields when summarizing a new task's populated fields.
+The system MUST blocklist fields such as "Rank", "Work Ratio", "Sprint", "Epic Link", and "Component/s" to prevent long technical strings (e.g., `com.atlassian.greenhopper...`) from cluttering the Telegram UI.
+
+#### Scenario: Ignore System Fields
+- **GIVEN** a new issue is created that is assigned to an active Sprint and has a Work Ratio
+- **WHEN** the bot builds the notification
+- **THEN** it extracts the Description but DOES NOT include "Rank", "Sprint", or "Work Ratio" in the Telegram message details.
 

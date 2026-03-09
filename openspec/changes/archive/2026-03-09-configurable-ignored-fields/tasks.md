@@ -1,0 +1,8 @@
+- [x] 1. Update `user-management` and `notification` specs to define the configurable ignored fields preference.
+- [x] 2. Run `npx openspec validate configurable-ignored-fields --strict --no-interactive` to ensure valid spec logic.
+- [x] 3. Update `src/models/user.ts` schema to add `preferences.ignoredFields: [String]` with adequate defaults.
+- [x] 4. Update the `extractAllPopulatedFields` function in `src/services/jira-client.ts` to accept a custom list of fields to ignore, merging it with standard technical blocks. Update corresponding JiraClient unit tests.
+- [x] 5. Update `src/services/monitor.ts` to pass `user.preferences.ignoredFields` into `extractAllPopulatedFields`.
+- [x] 6. Add "Ignored Fields" section in `buildPreferencesMenu` in `src/services/telegram.ts`, and add `reply_markup` callbacks to view, add, and remove specific text matches in their ignore list.
+- [x] 7. Ensure test coverage (`npm run test`) passes successfully.
+- [x] 8. Send UI screenshot of new configuration settings or prompt manual user review.

@@ -1,0 +1,9 @@
+- [x] 1. Run `npm install node-cache` and `npm install -D @types/node-cache` to add the in-memory cache library.
+- [x] 2. Update `infrastructure` spec to define caching capabilities, time-to-live (TTL) limits, and isolation boundaries (cache keys must include user email/token to prevent data leakage).
+- [x] 3. Run `npx openspec validate api-caching --strict --no-interactive` to ensure valid spec logic.
+- [x] 4. Update `src/services/jira-client.ts` to instantiate a single shared `NodeCache` instance (or a module-scoped cache).
+- [x] 5. Wrap `getAllProjects()` in `jira-client.ts` to check the cache using key `projects_${host}_${email}`. Set TTL to 300 seconds (5m).
+- [x] 6. Wrap `getTransitions(issueKey)` in `jira-client.ts` to check the cache using key `transitions_${host}_${email}_${issueKey}`. Set TTL to 300 seconds (5m).
+- [x] 7. Wrap `searchIssues(jql)` in `jira-client.ts` to check the cache using key `search_${host}_${email}_${jql}`. Set TTL to 15 seconds.
+- [x] 8. Update or write unit tests covering caching behavior where possible.
+- [x] 9. Ensure test coverage (`npm run test`) passes successfully and build cleanly.

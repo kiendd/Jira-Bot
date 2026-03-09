@@ -1,0 +1,6 @@
+- [ ] 1. Update `notification` spec to explicitly forbid noisy system fields (Rank, Sprint, Work Ratio, Epic Link) from appearing in new task summaries.
+- [ ] 2. Edit `JiraClient.extractAllPopulatedFields` in `src/services/jira-client.ts` array to expand the `blocklist` Set with `rank`, `work ratio`, `sprint`, `epic link`, `components`, `component/s`. Ensure case-insensitive comparison.
+- [ ] 3. Run validation (`npx openspec validate filter-irrelevant-fields --strict --no-interactive`).
+- [ ] 4. (Implementation phase) Write unit tests reflecting this change in field extraction.
+- [ ] 5. Run `npm run test` and `npm run build`.
+- [ ] 6. Present to user for manual testing to ensure creating/updating a task with a Sprint or Rank no longer vomits Greenhopper system strings into Telegram.

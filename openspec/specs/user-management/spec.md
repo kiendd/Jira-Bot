@@ -30,12 +30,22 @@ The system MUST persist user configurations across restarts.
 - **THEN** it automatically resumes monitoring for User A without requiring re-registration.
 
 ### Requirement: Command Interface
-The bot MUST support commands to manage the session, user preferences, and issue tracking scope. The bot MUST allow users to interactively view and toggle subscriptions to specific Jira projects using inline keyboards.
+The bot MUST allow users to select specific Jira projects to monitor.
+When both Relationship Scopes and Project Scopes are defined, the system MUST combine them using logical `AND`.
 
-#### Scenario: Scope Configuration Menu with Projects
-- **GIVEN** an active user
-- **WHEN** they open the settings menu and navigate to the project selection
-- **THEN** the bot fetches the list of available projects from Jira AND displays them as toggleable inline buttons.
-- **AND WHEN** the user toggles a project
-- **THEN** the bot updates their `projectScopes` preferences AND rebuilds their tracking JQL to include the selected projects combined with their relationship scopes using `OR` logic.
+#### Scenario: Project Subscription Isolation
+- **GIVEN** a user has configured "Assigned to Me" and selected project "PROJ1"
+- **WHEN** the bot builds the JQL for monitoring
+- **THEN** the JQL enforces an `AND` intersection: `(assignee = currentUser()) AND project in ("PROJ1") AND updated > -1d`.
+- **AND** the user does not receive notifications for unassigned issues in "PROJ1".
+
+### Requirement: Configurable Ignored Fields
+The system MUST allow users to configure a custom list of Jira fields they do NOT want to see in issue notifications.
+The system MUST store these `ignoredFields` as an array of strings in the user's preferences.
+The system MUST provide a UI in Telegram to manage (view/add/remove) these ignored fields.
+
+#### Scenario: Ignore Custom Noisy Field
+- **GIVEN** a user notices a custom noisy field "Story Points" in their Telegram notifications
+- **WHEN** they interact with the Ignored Fields `/settings` and add "Story Points"
+- **THEN** future notifications will automatically strip the "Story Points" field from output.
 

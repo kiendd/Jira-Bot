@@ -43,7 +43,7 @@ The bot MUST support commands to manage the session, user preferences, and issue
 - **THEN** the bot displays the human-readable Scope title combined, e.g., "🎯 Participated, 👁️ Watched" reflecting their chosen relationships.
 
 ## MODIFIED Requirements
-### Requirement: Command Interface (Project Subscriptions & JQL Logic)
+### Requirement: Command Interface
 The bot MUST allow users to select specific Jira projects to monitor.
 When both Relationship Scopes and Project Scopes are defined, the system MUST combine them using logical `AND`.
 

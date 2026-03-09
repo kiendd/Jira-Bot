@@ -10,6 +10,7 @@ export interface IUserPreferences {
         watched: boolean;
     };
     projectScopes: string[];
+    ignoredFields: string[];
     schedule: {
         timezone: string;
         activeDays: number[];
@@ -48,6 +49,7 @@ const UserSchema = new Schema<IUser>(
                 watched: { type: Boolean, default: false },
             },
             projectScopes: { type: [String], default: [] },
+            ignoredFields: { type: [String], default: ['rank', 'work ratio', 'sprint', 'epic link', 'components', 'component/s'] },
             schedule: {
                 timezone: { type: String, default: 'UTC' },
                 activeDays: { type: [Number], default: [1, 2, 3, 4, 5] },
